@@ -1,0 +1,158 @@
+/* Profile rows in the settings tab */
+.t2ap-profile-row .setting-item-description {
+	white-space: pre-line;
+}
+
+.t2ap-profile-default .setting-item-name {
+	font-weight: var(--font-semibold);
+}
+
+/* Inline validation */
+.t2ap-field-error:not(:empty) {
+	color: var(--text-error);
+	font-size: var(--font-ui-smaller);
+	margin-top: var(--size-2-1);
+	max-width: 20em;
+	text-align: right;
+}
+
+input.t2ap-invalid {
+	border-color: var(--text-error);
+}
+
+/* Auto-detection status */
+.t2ap-detect-status {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	margin-bottom: var(--size-4-3);
+}
+
+.t2ap-detect-warning {
+	color: var(--text-warning);
+}
+
+/* Voice list cache status */
+.t2ap-cache-status {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	margin-bottom: var(--size-4-3);
+}
+
+/* A button carrying both an icon and a text label */
+.t2ap-icon-button {
+	align-items: center;
+	display: inline-flex;
+	gap: var(--size-4-1);
+}
+
+.t2ap-icon-button .svg-icon {
+	height: 1em;
+	width: 1em;
+}
+
+/* Plaintext key warning */
+.t2ap-key-warning {
+	background: var(--background-modifier-error-hover);
+	border-radius: var(--radius-s);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	margin-bottom: var(--size-4-3);
+	padding: var(--size-4-2) var(--size-4-3);
+}
+
+/* Profile editor */
+
+/*
+ * Obsidian core draws a rule above every `.setting-item`. In a settings tab
+ * that separates unrelated options, but this modal is one short form whose
+ * grouping is already carried by its headings, so the rules are just noise.
+ * Vertical rhythm does the separating instead.
+ */
+.t2ap-profile-modal .setting-item {
+	border-top: none;
+	padding: var(--size-4-2) 0;
+}
+
+/* Headings keep a little more air above them to hold the groups apart. */
+.t2ap-profile-modal .setting-item-heading {
+	margin-top: var(--size-4-4);
+	padding-bottom: var(--size-4-1);
+}
+
+.t2ap-profile-modal .t2ap-textarea {
+	min-width: 15em;
+	resize: vertical;
+}
+
+/*
+ * Action row pinned to the bottom of the scrolling modal body, so Save stays
+ * reachable from anywhere in a long form. This border is deliberate: it marks
+ * where content scrolls underneath.
+ */
+.t2ap-profile-modal .t2ap-modal-actions {
+	background-color: var(--modal-background, var(--background-primary));
+	border-top: 1px solid var(--background-modifier-border);
+	bottom: 0;
+	margin-top: var(--size-4-4);
+	padding: var(--size-4-3) 0 0;
+	position: sticky;
+	z-index: 1;
+}
+
+.t2ap-profile-modal .t2ap-modal-actions .setting-item-control {
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+}
+
+/*
+ * A setting whose control belongs on its own full-width line rather than in the
+ * narrow column beside the label. Column flex rather than `display: block` so
+ * .setting-item-info and .setting-item-control stay flex children and keep
+ * their own internal layout.
+ */
+.t2ap-setting-stacked {
+	align-items: stretch;
+	flex-direction: column;
+}
+
+.t2ap-setting-stacked .setting-item-control {
+	justify-content: flex-start;
+	margin-top: var(--size-4-2);
+	width: 100%;
+}
+
+.t2ap-setting-stacked textarea {
+	min-width: 0;
+	width: 100%;
+}
+
+.t2ap-loading {
+	color: var(--text-muted);
+}
+
+/* Conversion dialog */
+.t2ap-convert-text {
+	font-family: inherit;
+	margin-bottom: var(--size-4-3);
+	resize: vertical;
+	width: 100%;
+}
+
+.t2ap-convert-status:not(:empty) {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	margin-bottom: var(--size-4-2);
+}
+
+/* Fuzzy profile picker */
+.t2ap-suggestion-title {
+	font-weight: var(--font-medium);
+}
+
+.t2ap-suggestion-desc {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}

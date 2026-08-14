@@ -1,0 +1,35 @@
+{
+	"name": "obsidian-multilingual-tts",
+	"version": "0.1.0",
+	"description": "Obsidian text-to-speech that detects the language of a selection and reads it with the matching voice profile",
+	"main": "main.js",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"lint": "eslint src --max-warnings 0",
+		"format": "prettier --write .",
+		"format:check": "prettier --check ."
+	},
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^26.2.0",
+		"@xmldom/xmldom": "^0.9.10",
+		"builtin-modules": "^4.0.0",
+		"esbuild": "^0.28.2",
+		"eslint": "^10.8.1",
+		"obsidian": "^1.13.1",
+		"prettier": "3.9.6",
+		"tslib": "^2.8.1",
+		"typescript": "^5.7.2",
+		"typescript-eslint": "^8.66.0",
+		"vitest": "^4.1.10"
+	},
+	"dependencies": {
+		"franc-min": "^6.2.0",
+		"microsoft-cognitiveservices-speech-sdk": "^1.51.0"
+	}
+}

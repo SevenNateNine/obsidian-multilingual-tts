@@ -1,0 +1,10 @@
+{
+	"id": "multilingual-tts",
+	"name": "Multilingual TTS",
+	"version": "0.1.0",
+	"minAppVersion": "1.4.0",
+	"description": "Reads notes aloud in the language they are written in, detecting the language of a selection and speaking it with the voice profile you saved for it.",
+	"author": "Nathaniel Chan",
+	"authorUrl": "https://github.com/SevenNateNine",
+	"isDesktopOnly": false
+}

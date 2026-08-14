@@ -1,0 +1,17 @@
+node_modules/
+
+# Build output — attached to GitHub releases, not committed
+main.js
+main.js.map
+
+# Plugin settings: holds the Azure Speech key
+data.json
+
+# Generated Azure voice catalog cache
+voice-cache.json
+
+*.log
+*.tsbuildinfo
+coverage/
+.DS_Store
+Thumbs.db
