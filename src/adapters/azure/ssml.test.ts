@@ -8,7 +8,7 @@ const profile = (overrides: Partial<VoiceProfile> = {}): VoiceProfile => ({
 	id: "p1",
 	name: "Test",
 	description: "",
-	provider: "azure",
+	providerId: "azure",
 	locale: "en-US",
 	voiceId: "en-US-JennyNeural",
 	rate: 1,

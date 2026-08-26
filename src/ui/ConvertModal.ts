@@ -83,7 +83,7 @@ export class ConvertModal extends Modal {
 			});
 		}
 
-		const provider = this.plugin.providers.get(this.profile.provider);
+		const provider = this.plugin.providers.get(this.profile.providerId);
 		const savable = provider?.kind === "rendering";
 
 		if (savable) {
@@ -104,7 +104,7 @@ export class ConvertModal extends Modal {
 				cls: "setting-item-description",
 				text: provider
 					? `${provider.displayName} plays through the device and cannot save to a file.`
-					: `This profile uses an unknown engine: ${this.profile.provider}.`,
+					: "This profile's speech provider no longer exists. Pick another in settings.",
 			});
 		}
 
@@ -118,7 +118,7 @@ export class ConvertModal extends Modal {
 		if (!container) return;
 		container.empty();
 
-		const provider = this.plugin.providers.get(this.profile.provider);
+		const provider = this.plugin.providers.get(this.profile.providerId);
 		const savable = provider?.kind === "rendering";
 		const hasText = this.text.trim().length > 0;
 

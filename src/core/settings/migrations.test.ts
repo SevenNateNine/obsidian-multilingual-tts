@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { migrateSettings } from "./migrations";
-import { CURRENT_SCHEMA_VERSION, DEFAULT_SETTINGS, type VoiceProfile } from "./types";
+import {
+	CURRENT_SCHEMA_VERSION,
+	DEFAULT_SETTINGS,
+	type PluginSettings,
+	type ProviderInstance,
+	type VoiceProfile,
+} from "./types";
 
 /** Migrate `raw` and return its first profile, so a test can index it directly. */
 function firstProfile(raw: unknown): VoiceProfile {
@@ -8,6 +14,21 @@ function firstProfile(raw: unknown): VoiceProfile {
 	if (!profile) throw new Error("expected migrateSettings to keep one profile");
 	return profile;
 }
+
+function provider(settings: PluginSettings, id: string): ProviderInstance {
+	const instance = settings.providers.find((p) => p.id === id);
+	if (!instance) throw new Error(`expected a provider with id ${id}`);
+	return instance;
+}
+
+/** A schema 2 payload: one Azure block, and profiles naming an engine. */
+const schema2 = {
+	schemaVersion: 2,
+	azure: { key: "obf:abc", region: "eastus", keyStorage: "obfuscated" },
+	profiles: [
+		{ id: "a", name: "French", provider: "azure", locale: "fr-FR", voiceId: "v" },
+	],
+};
 
 describe("migrateSettings", () => {
 	it("returns defaults for a fresh install", () => {
@@ -27,9 +48,8 @@ describe("migrateSettings", () => {
 	});
 
 	it("fills in nested groups that a stored payload omits", () => {
-		const result = migrateSettings({ azure: { key: "abc" } });
-		expect(result.azure.key).toBe("abc");
-		expect(result.azure.region).toBe("");
+		const result = migrateSettings({ autoDetect: { enabled: true } });
+		expect(result.autoDetect.enabled).toBe(true);
 		expect(result.output.defaultFolder).toBe(DEFAULT_SETTINGS.output.defaultFolder);
 		expect(result.autoDetect.minChars).toBe(DEFAULT_SETTINGS.autoDetect.minChars);
 	});
@@ -43,12 +63,162 @@ describe("migrateSettings", () => {
 		expect(result.output.defaultFolder).toBe("Sound");
 	});
 
+	describe("providers", () => {
+		it("gives a fresh install only the device voices", () => {
+			const { providers } = migrateSettings(null);
+			expect(providers).toHaveLength(1);
+			expect(providers[0]?.id).toBe("system");
+			expect(providers[0]?.type).toBe("system");
+		});
+
+		it("turns the schema 2 Azure block into an instance", () => {
+			const result = migrateSettings(schema2);
+			const azure = provider(result, "azure");
+
+			expect(azure.type).toBe("azure");
+			expect(azure.config).toEqual({ key: "obf:abc", region: "eastus" });
+			expect(azure.keyStorage).toBe("obfuscated");
+		});
+
+		// The key stays at rest. Only the composition root ever decodes it.
+		it("carries the stored key across untouched", () => {
+			const raw = { azure: { key: "enc:envelope", keyStorage: "passphrase" } };
+			const azure = provider(migrateSettings(raw), "azure");
+
+			expect(azure.config.key).toBe("enc:envelope");
+			expect(azure.keyStorage).toBe("passphrase");
+		});
+
+		// A stale block would leave a speech key in data.json after the provider
+		// that owns it is deleted.
+		it("drops the old azure block from the result", () => {
+			expect(migrateSettings(schema2)).not.toHaveProperty("azure");
+		});
+
+		it("adds no Azure instance for a user who never configured one", () => {
+			const { providers } = migrateSettings({ azure: { key: "", region: "" } });
+			expect(providers.map((p) => p.type)).toEqual(["system"]);
+		});
+
+		// Without this the profile would point at an instance that never existed.
+		it("adds an Azure instance when only a profile names it", () => {
+			const raw = { profiles: [{ id: "a", name: "A", provider: "azure" }] };
+			expect(provider(migrateSettings(raw), "azure").type).toBe("azure");
+		});
+
+		it("keeps a schema 3 provider list as it is", () => {
+			const stored = {
+				providers: [
+					{ id: "system", type: "system", name: "Device", config: {} },
+					{
+						id: "uuid-1",
+						type: "azure",
+						name: "Azure work",
+						config: { key: "k", region: "westus" },
+						keyStorage: "plain",
+					},
+				],
+			};
+			const result = migrateSettings(stored);
+
+			expect(result.providers).toHaveLength(2);
+			expect(provider(result, "uuid-1").name).toBe("Azure work");
+			expect(provider(result, "uuid-1").keyStorage).toBe("plain");
+			expect(provider(result, "system").name).toBe("Device");
+		});
+
+		// A build that does not know the engine cannot run it, and offering it
+		// would give the user a provider that fails on every read.
+		it("drops an instance whose engine this build does not have", () => {
+			const raw = {
+				providers: [{ id: "x", type: "elevenlabs", name: "Eleven", config: {} }],
+			};
+			expect(migrateSettings(raw).providers.map((p) => p.id)).toEqual(["system"]);
+		});
+
+		it("drops a duplicate id, which would shadow the first entry", () => {
+			const raw = {
+				providers: [
+					{ id: "dup", type: "azure", name: "First", config: { region: "a" } },
+					{ id: "dup", type: "azure", name: "Second", config: { region: "b" } },
+				],
+			};
+			const result = migrateSettings(raw);
+
+			expect(result.providers.filter((p) => p.id === "dup")).toHaveLength(1);
+			expect(provider(result, "dup").name).toBe("First");
+		});
+
+		it("adds the device voices back when the stored list lost them", () => {
+			const raw = {
+				providers: [{ id: "uuid-1", type: "azure", name: "Azure", config: {} }],
+			};
+			expect(migrateSettings(raw).providers.map((p) => p.id)).toEqual([
+				"system",
+				"uuid-1",
+			]);
+		});
+
+		// There is one device, so a second system entry is a hand edit.
+		it("refuses a second device provider at another id", () => {
+			const raw = {
+				providers: [
+					{ id: "system", type: "system", name: "Device", config: {} },
+					{ id: "other", type: "system", name: "Device again", config: {} },
+				],
+			};
+			expect(migrateSettings(raw).providers.map((p) => p.id)).toEqual(["system"]);
+		});
+
+		it("keeps only the config keys the engine declares", () => {
+			const raw = {
+				providers: [
+					{
+						id: "uuid-1",
+						type: "azure",
+						name: "Azure",
+						config: { key: "k", region: "westus", oldSecret: "leftover" },
+					},
+				],
+			};
+			expect(provider(migrateSettings(raw), "uuid-1").config).toEqual({
+				key: "k",
+				region: "westus",
+			});
+		});
+
+		it("survives a config value of the wrong type", () => {
+			const raw = { azure: { key: 42, region: null } };
+			const { providers } = migrateSettings(raw);
+			// Nothing usable was stored, so no instance is worth creating.
+			expect(providers.map((p) => p.type)).toEqual(["system"]);
+		});
+
+		it("replaces a key storage mode it does not know", () => {
+			const raw = { azure: { key: "abc", keyStorage: "rot13" } };
+			expect(provider(migrateSettings(raw), "azure").keyStorage).toBe("obfuscated");
+		});
+
+		/**
+		 * Schema 1 has no keyStorage and an unprefixed key. Taking the default is
+		 * safe because `decodeKey` reads the prefix, not this field.
+		 */
+		it("leaves a schema 1 key untouched while defaulting the mode", () => {
+			const azure = provider(
+				migrateSettings({ schemaVersion: 1, azure: { key: "abc" } }),
+				"azure",
+			);
+			expect(azure.config.key).toBe("abc");
+			expect(azure.keyStorage).toBe("obfuscated");
+		});
+	});
+
 	describe("profiles", () => {
 		const stored = {
 			id: "abc",
 			name: "French",
 			description: "Slow",
-			provider: "azure",
+			providerId: "system",
 			locale: "fr-FR",
 			voiceId: "fr-FR-DeniseNeural",
 			rate: 1.2,
@@ -93,11 +263,26 @@ describe("migrateSettings", () => {
 			expect(ids[0]).not.toBe(ids[1]);
 		});
 
-		it("falls back to the system provider for an unknown one", () => {
+		it("points a schema 2 engine name at the instance it became", () => {
+			expect(firstProfile(schema2).providerId).toBe("azure");
+		});
+
+		it("falls back to the device voices for an engine that never existed", () => {
 			const profile = firstProfile({
-				profiles: [{ ...stored, provider: "elevenlabs" }],
+				profiles: [{ ...stored, providerId: undefined, provider: "elevenlabs" }],
 			});
-			expect(profile.provider).toBe("system");
+			expect(profile.providerId).toBe("system");
+		});
+
+		/**
+		 * The user may have deleted a provider they intend to add back. Rewriting
+		 * the field would silently replace their chosen voice with a device one.
+		 */
+		it("keeps a provider id that no instance has", () => {
+			const profile = firstProfile({
+				profiles: [{ ...stored, providerId: "deleted-uuid" }],
+			});
+			expect(profile.providerId).toBe("deleted-uuid");
 		});
 
 		it("drops entries that are not objects", () => {
@@ -135,38 +320,6 @@ describe("migrateSettings", () => {
 			expect(
 				migrateSettings({ profiles: [], defaultProfileId: "gone" }).defaultProfileId,
 			).toBeNull();
-		});
-	});
-
-	describe("key storage", () => {
-		it("defaults a fresh install to obfuscated", () => {
-			expect(migrateSettings(null).azure.keyStorage).toBe("obfuscated");
-		});
-
-		it("keeps a stored mode", () => {
-			const raw = { azure: { key: "abc", keyStorage: "passphrase" } };
-			expect(migrateSettings(raw).azure.keyStorage).toBe("passphrase");
-		});
-
-		it("replaces a mode it does not know", () => {
-			const raw = { azure: { key: "abc", keyStorage: "rot13" } };
-			expect(migrateSettings(raw).azure.keyStorage).toBe("obfuscated");
-		});
-
-		/**
-		 * Schema 1 has no keyStorage and an unprefixed key. Taking the default is
-		 * safe because `decodeKey` reads the prefix, not this field.
-		 */
-		it("leaves a schema 1 key untouched while defaulting the mode", () => {
-			const result = migrateSettings({ schemaVersion: 1, azure: { key: "abc" } });
-			expect(result.azure.key).toBe("abc");
-			expect(result.azure.keyStorage).toBe("obfuscated");
-		});
-
-		it("survives a key or region of the wrong type", () => {
-			const raw = { azure: { key: 42, region: null } };
-			expect(migrateSettings(raw).azure.key).toBe("");
-			expect(migrateSettings(raw).azure.region).toBe("");
 		});
 	});
 });

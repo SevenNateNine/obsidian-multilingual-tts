@@ -15,7 +15,7 @@ describe("starterProfile", () => {
 		const profile = starterProfile(voice);
 
 		expect(profile.name).toBe("System — Microsoft David");
-		expect(profile.provider).toBe("system");
+		expect(profile.providerId).toBe("system");
 		expect(profile.voiceId).toBe(voice.id);
 		expect(profile.locale).toBe("en-GB");
 	});
@@ -26,7 +26,7 @@ describe("starterProfile", () => {
 		const profile = starterProfile(null);
 
 		expect(profile.name).toBe("System voice");
-		expect(profile.provider).toBe("system");
+		expect(profile.providerId).toBe("system");
 		expect(profile.voiceId).toBe("");
 		expect(profile.locale).toBe("en-US");
 	});

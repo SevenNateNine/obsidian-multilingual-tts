@@ -1,43 +1,42 @@
-import { App, Menu, Notice, PluginSettingTab, Setting, debounce } from "obsidian";
+import { App, Menu, Notice, PluginSettingTab, Setting } from "obsidian";
 import type MultilingualTtsPlugin from "../main";
-import { createProfile, type VoiceProfile } from "../core/settings/types";
-import { KEY_STORAGE_MODES, type KeyStorage } from "../core/settings/secret";
+import {
+	createProfile,
+	createProviderInstance,
+	findProviderInstance,
+	uniqueProviderName,
+	type ProviderInstance,
+	type VoiceProfile,
+} from "../core/settings/types";
+import { instantiableTypes, providerTypeInfo } from "../core/tts/providerTypes";
 import { ProfileEditorModal } from "./ProfileEditorModal";
-import { PassphraseModal } from "./PassphraseModal";
+import { ProviderEditorModal } from "./ProviderEditorModal";
 import { validateFolderPath } from "../core/paths";
 import { userMessage } from "../core/errors";
 import { isDetectable, languageSubtag } from "../core/text/languages";
-import { formatAbsoluteTime, formatRelativeTime } from "../core/time";
-import type { AzureProvider } from "../adapters/azure/AzureProvider";
-import type { CatalogCacheInfo } from "../adapters/azure/voiceCatalog";
 import { setButtonLabel } from "../adapters/obsidian/buttonLabel";
 
-const KEY_STORAGE_LABELS: Record<KeyStorage, string> = {
-	plain: "Plain text",
-	obfuscated: "Obfuscated",
-	passphrase: "Encrypted with a passphrase",
-};
+type TabId = "general" | "providers";
 
-const KEY_STORAGE_DESCRIPTIONS: Record<KeyStorage, string> = {
-	plain: "Anything that opens data.json can read the key.",
-	obfuscated:
-		"Encoded, not encrypted. It stops a casual read, a screenshot and a " +
-		"pasted bug report. It does not stop anybody who wants the key.",
-	passphrase:
-		"AES-GCM, with the passphrase stretched by PBKDF2. You enter it once " +
-		"per session. A lost passphrase means you paste the key again from Azure.",
-};
+const TABS: readonly { id: TabId; label: string }[] = [
+	{ id: "general", label: "General" },
+	{ id: "providers", label: "Providers" },
+];
+
+/** Why a refresh produced no new voice list. */
+type RefreshResult =
+	| { ok: true; count: number }
+	| { ok: false; reason: "locked" | "missing" | "not-configured" }
+	| { ok: false; reason: "failed"; error: unknown };
 
 export class SettingsTab extends PluginSettingTab {
-	/**
-	 * `azure` arrives separately from the registry. A speech key, a region and a
-	 * refreshable catalog belong to this one engine, so the block that renders
-	 * them is Azure-specific by nature.
-	 */
+	private activeTab: TabId = "general";
+	private bodyEl: HTMLElement | null = null;
+	private readonly tabButtons = new Map<TabId, HTMLElement>();
+
 	constructor(
 		app: App,
 		private readonly plugin: MultilingualTtsPlugin,
-		private readonly azure: AzureProvider,
 	) {
 		super(app, plugin);
 	}
@@ -45,12 +44,84 @@ export class SettingsTab extends PluginSettingTab {
 	override display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		this.tabButtons.clear();
 
-		this.renderProfiles(containerEl);
-		this.renderAutoDetect(containerEl);
-		this.renderAzure(containerEl);
-		this.renderOutput(containerEl);
-		this.renderReading(containerEl);
+		this.renderTabBar(containerEl);
+		this.bodyEl = containerEl.createDiv({ cls: "t2ap-tab-body" });
+		this.renderBody();
+	}
+
+	/**
+	 * Redraw the current tab only.
+	 *
+	 * Almost every control here redraws after saving, because one option can hide
+	 * or reveal another. Rebuilding the whole screen would send the user back to
+	 * the first tab after each edit, so the bar is built once and stays.
+	 */
+	private renderBody(): void {
+		const body = this.bodyEl;
+		if (!body) return;
+
+		body.empty();
+		if (this.activeTab === "general") this.renderGeneral(body);
+		else this.renderProviders(body);
+	}
+
+	private renderGeneral(container: HTMLElement): void {
+		this.renderProfiles(container);
+		this.renderAutoDetect(container);
+		this.renderOutput(container);
+		this.renderReading(container);
+	}
+
+	private renderTabBar(container: HTMLElement): void {
+		const bar = container.createDiv({ cls: "t2ap-tab-bar" });
+		bar.setAttribute("role", "tablist");
+
+		TABS.forEach((tab, index) => {
+			const button = bar.createEl("button", { cls: "t2ap-tab", text: tab.label });
+			button.type = "button";
+			button.setAttribute("role", "tab");
+			button.addEventListener("click", () => this.select(tab.id));
+			button.addEventListener("keydown", (event) => this.onTabKey(event, index));
+			this.tabButtons.set(tab.id, button);
+		});
+
+		this.markActiveTab();
+	}
+
+	/**
+	 * Left and right move between tabs, which is what a tablist is expected to
+	 * do. Only the selected tab is in the page's tab order, so one Tab press
+	 * leaves the bar rather than walking through every tab in it.
+	 */
+	private onTabKey(event: KeyboardEvent, index: number): void {
+		const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+		if (delta === 0) return;
+
+		event.preventDefault();
+		const tab = TABS[(index + delta + TABS.length) % TABS.length];
+		if (!tab) return;
+
+		this.select(tab.id);
+		this.tabButtons.get(tab.id)?.focus();
+	}
+
+	private select(id: TabId): void {
+		if (id === this.activeTab) return;
+
+		this.activeTab = id;
+		this.markActiveTab();
+		this.renderBody();
+	}
+
+	private markActiveTab(): void {
+		for (const [id, button] of this.tabButtons) {
+			const active = id === this.activeTab;
+			button.toggleClass("is-active", active);
+			button.setAttribute("aria-selected", String(active));
+			button.tabIndex = active ? 0 : -1;
+		}
 	}
 
 	private renderAutoDetect(container: HTMLElement): void {
@@ -70,7 +141,7 @@ export class SettingsTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.autoDetect.enabled = value;
 						await this.plugin.saveSettings();
-						this.display();
+						this.renderBody();
 					}),
 			);
 
@@ -139,324 +210,156 @@ export class SettingsTab extends PluginSettingTab {
 		}
 	}
 
-	private renderAzure(container: HTMLElement): void {
+	private renderProviders(container: HTMLElement): void {
 		new Setting(container)
-			.setName("Azure Speech")
+			.setName("Providers")
 			.setDesc(
-				"Optional. Adds high-quality neural voices with speaking styles. " +
-					"System voices work without any of this.",
-			)
-			.setHeading();
-
-		this.renderKeyStorage(container);
-		this.renderKeyField(container);
-
-		new Setting(container)
-			.setName("Region")
-			.setDesc("The resource's region identifier, for example eastus.")
-			.addText((text) =>
-				text
-					.setPlaceholder("eastus")
-					.setValue(this.plugin.settings.azure.region)
-					.onChange(async (value) => {
-						this.plugin.settings.azure.region = value.trim();
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		// Declared before the setting so the button's handler can close over it,
-		// but created after, so it renders below the button.
-		let status: HTMLElement | null = null;
-		const showCacheStatus = () => {
-			if (status) void this.renderCacheStatus(status);
-		};
-
-		new Setting(container)
-			.setName("Voice list")
-			.setDesc(
-				"Voices are fetched from Azure and cached for a week, so new voices " +
-					"appear without a plugin update.",
-			)
-			.addButton((btn) => {
-				const label = (text: string) => setButtonLabel(btn, "refresh-cw", text);
-
-				btn.setTooltip("Refreshes voice list");
-				label("Refresh");
-
-				btn.onClick(async () => {
-					// Locked means the key is present but unreadable. Asking for the
-					// passphrase is the right prompt, not "enter a speech key".
-					if (this.plugin.isAzureKeyLocked()) {
-						if (!(await this.plugin.unlockAzureKey())) return;
-						this.display();
-					}
-					if (!this.azure.isConfigured()) {
-						new Notice("Enter a speech key and region first.");
-						return;
-					}
-					btn.setDisabled(true);
-					label("Refreshing…");
-					try {
-						const voices = await this.azure.refreshVoices();
-						new Notice(`Loaded ${voices.length} Azure voices.`);
-					} catch (err) {
-						new Notice(userMessage(err));
-					} finally {
-						btn.setDisabled(false);
-						label("Refresh");
-						showCacheStatus();
-					}
-				});
-			});
-
-		// Starts empty and fills asynchronously, because display() is synchronous.
-		status = container.createDiv({ cls: "t2ap-cache-status" });
-		showCacheStatus();
-	}
-
-	/**
-	 * How the key is written to data.json.
-	 *
-	 * The wording says plainly what each level does and does not do. Obfuscation
-	 * is not encryption, and a user who believes it is can make a bad decision.
-	 */
-	private renderKeyStorage(container: HTMLElement): void {
-		const { keyStorage } = this.plugin.settings.azure;
-
-		new Setting(container)
-			.setName("Key storage")
-			.setDesc(KEY_STORAGE_DESCRIPTIONS[keyStorage])
-			.addDropdown((dd) => {
-				for (const mode of KEY_STORAGE_MODES) {
-					dd.addOption(mode, KEY_STORAGE_LABELS[mode]);
-				}
-				dd.setValue(keyStorage).onChange(
-					(value) => void this.changeKeyStorage(value as KeyStorage),
-				);
-			});
-
-		if (keyStorage === "plain") {
-			container.createDiv({
-				cls: "t2ap-key-warning",
-				text:
-					"The key is stored as plain text in this plugin's data.json. " +
-					"If you sync your vault, the key syncs with it.",
-			});
-		}
-	}
-
-	/**
-	 * Re-encode the stored key for a new mode.
-	 *
-	 * Every direction needs the key in the clear first, so a locked key is
-	 * unlocked before anything changes. A cancelled dialog leaves the mode alone,
-	 * and the redraw puts the dropdown back to what is actually stored.
-	 */
-	private async changeKeyStorage(mode: KeyStorage): Promise<void> {
-		if (this.plugin.isAzureKeyLocked() && !(await this.plugin.unlockAzureKey())) {
-			this.display();
-			return;
-		}
-
-		if (mode !== "passphrase") {
-			await this.plugin.setKeyStorage(mode, null);
-			this.display();
-			return;
-		}
-
-		new PassphraseModal(this.app, {
-			mode: "create",
-			onSubmit: async (passphrase) => {
-				await this.plugin.setKeyStorage("passphrase", passphrase);
-				this.display();
-				return null;
-			},
-			onCancel: () => this.display(),
-		}).open();
-	}
-
-	/** A locked key cannot be shown or edited, so it offers an unlock instead. */
-	private renderKeyField(container: HTMLElement): void {
-		if (this.plugin.isAzureKeyLocked()) {
-			new Setting(container)
-				.setName("Speech key")
-				.setDesc("Encrypted. Unlock it to use Azure voices in this session.")
-				.addButton((btn) =>
-					btn
-						.setButtonText("Unlock")
-						.setCta()
-						.onClick(async () => {
-							if (await this.plugin.unlockAzureKey()) this.display();
-						}),
-				);
-			return;
-		}
-
-		// Encrypting on every keystroke would run PBKDF2 per character, so the
-		// value updates immediately and only the write to disk waits for a pause.
-		const persist = debounce(() => void this.plugin.saveSettings(), 500, true);
-
-		new Setting(container)
-			.setName("Speech key")
-			.setDesc("From your Azure Speech resource's Keys and Endpoint page.")
-			.addText((text) => {
-				text
-					.setPlaceholder("Enter your speech key")
-					.setValue(this.plugin.settings.azure.key)
-					.onChange((value) => {
-						this.plugin.setAzureKeyValue(value.trim());
-						persist();
-					});
-				text.inputEl.type = "password";
-				text.inputEl.autocomplete = "off";
-			});
-	}
-
-	/**
-	 * What is cached, shown at all times rather than only after a refresh.
-	 * The cache is what makes per-voice style and role gating work, and it
-	 * expires after a week, so its age is worth surfacing.
-	 */
-	private async renderCacheStatus(el: HTMLElement): Promise<void> {
-		const { azure } = this;
-		const region = this.plugin.settings.azure.region.trim();
-
-		let info: CatalogCacheInfo | null = null;
-		try {
-			info = await azure.cacheInfo();
-		} catch {
-			info = null;
-		}
-
-		el.empty();
-		el.removeAttribute("title");
-
-		if (!info || info.voiceCount === 0) {
-			el.setText(
-				azure.isConfigured()
-					? "No voice list cached yet. Press Refresh to load voices."
-					: "No voice list cached. Add a speech key and region above.",
-			);
-			return;
-		}
-
-		// isCatalogFresh rejects a catalog from another region, so a region change
-		// silently invalidates the cache. Say so instead of showing stale counts.
-		if (region && info.region && info.region !== region) {
-			el.addClass("t2ap-detect-warning");
-			el.setText(
-				`Cached for ${info.region}. The current region is ${region}. Press Refresh.`,
-			);
-			return;
-		}
-
-		el.removeClass("t2ap-detect-warning");
-		el.setText(
-			`${info.voiceCount} voices across ${info.localeCount} languages · updated ${formatRelativeTime(info.fetchedAt)}`,
-		);
-		el.setAttribute("title", formatAbsoluteTime(info.fetchedAt));
-	}
-
-	private renderProfiles(container: HTMLElement): void {
-		new Setting(container)
-			.setName("Voice profiles")
-			.setDesc(
-				"Saved combinations of language, voice and delivery. The order here " +
-					"is the priority used when more than one profile matches.",
+				"The speech engines your profiles can use. Add one for each account, " +
+					"and two of the same engine can hold two different subscriptions.",
 			)
 			.setHeading()
+			.addButton((btn) => {
+				setButtonLabel(btn, "refresh-cw", "Refresh all");
+				btn.setTooltip("Reload every voice list that can be reloaded");
+				btn.onClick(() => void this.refreshAll(btn));
+			})
 			.addButton((btn) =>
 				btn
-					.setButtonText("Add profile")
+					.setButtonText("Add provider")
 					.setCta()
-					.onClick(() => this.openEditor(createProfile(), true)),
+					.onClick((event) => this.openTypeMenu(event)),
 			);
 
-		const { profiles, defaultProfileId } = this.plugin.settings;
+		for (const instance of this.plugin.settings.providers) {
+			this.renderProviderRow(container, instance);
+		}
+	}
 
-		if (profiles.length === 0) {
-			container.createEl("p", {
-				cls: "setting-item-description",
-				text: "No profiles yet. Add one to start reading notes aloud.",
-			});
-			return;
+	/** One entry per engine the user can add. The list is the extension point. */
+	private openTypeMenu(event: MouseEvent): void {
+		const menu = new Menu();
+
+		for (const info of instantiableTypes()) {
+			menu.addItem((item) =>
+				item.setTitle(info.displayName).onClick(() => {
+					const name = uniqueProviderName(this.plugin.settings, info.displayName);
+					this.openProviderEditor(createProviderInstance(info.type, { name }), true);
+				}),
+			);
 		}
 
-		profiles.forEach((profile, index) => {
-			const isDefault = profile.id === defaultProfileId;
-			const setting = new Setting(container)
-				.setName(isDefault ? `${profile.name} (default)` : profile.name)
-				.setDesc(this.describeProfile(profile));
+		menu.showAtMouseEvent(event);
+	}
 
-			setting.settingEl.addClass("t2ap-profile-row");
-			if (isDefault) setting.settingEl.addClass("t2ap-profile-default");
+	private renderProviderRow(container: HTMLElement, instance: ProviderInstance): void {
+		const info = providerTypeInfo(instance.type);
+		const setting = new Setting(container)
+			.setName(instance.name)
+			.setDesc(this.describeProvider(instance));
 
-			if (!isDefault) {
-				setting.addExtraButton((btn) =>
-					btn
-						.setIcon("star")
-						.setTooltip("Make default")
-						.onClick(() => void this.setDefault(profile.id)),
-				);
-			}
+		setting.settingEl.addClass("t2ap-provider-row");
 
-			setting.addExtraButton((btn) =>
-				btn
-					.setIcon("play")
-					.setTooltip("Preview")
-					.onClick(() => void this.preview(profile)),
-			);
+		setting.addButton((btn) => {
+			const label = (text: string) => setButtonLabel(btn, "refresh-cw", text);
+			label("Refresh");
+			btn.setTooltip("Reload this provider's voice list");
+			btn.onClick(async () => {
+				btn.setDisabled(true);
+				label("Refreshing…");
+				try {
+					await this.refreshOne(instance);
+				} finally {
+					this.renderBody();
+				}
+			});
+		});
 
-			setting.addExtraButton((btn) =>
-				btn
-					.setIcon("pencil")
-					.setTooltip("Edit")
-					.onClick(() => this.openEditor({ ...profile }, false)),
-			);
+		setting.addExtraButton((btn) =>
+			btn
+				.setIcon("pencil")
+				.setTooltip("Edit")
+				.onClick(() => this.openProviderEditor(instance, false)),
+		);
 
+		// The device voices are neither added nor removed: the device is the
+		// account, so there is exactly one and it has nothing to copy.
+		if (info.instantiable) {
 			setting.addExtraButton((btn) =>
 				btn
 					.setIcon("more-vertical")
 					.setTooltip("More")
 					.onClick(() => {
-						// addExtraButton's handler receives no event, so anchor the
-						// menu to the button's own position instead.
 						const rect = btn.extraSettingsEl.getBoundingClientRect();
-						this.openRowMenu({ x: rect.left, y: rect.bottom }, profile, index);
+						this.openProviderMenu({ x: rect.left, y: rect.bottom }, instance);
 					}),
 			);
-		});
+		}
+
+		// Starts empty and fills asynchronously, because renderBody is synchronous.
+		const status = container.createDiv({ cls: "t2ap-provider-status" });
+		void this.renderProviderStatus(status, instance);
 	}
 
-	private openRowMenu(
+	private describeProvider(instance: ProviderInstance): string {
+		const bits = [providerTypeInfo(instance.type).displayName];
+
+		if (this.plugin.isProviderLocked(instance.id)) bits.push("locked");
+		else if (this.plugin.providers.get(instance.id)?.isConfigured() === false) {
+			bits.push("not configured");
+		}
+
+		const used = this.plugin.settings.profiles.filter(
+			(p) => p.providerId === instance.id,
+		).length;
+		bits.push(used === 1 ? "1 profile" : `${used} profiles`);
+
+		return bits.join(" · ");
+	}
+
+	/**
+	 * What the provider says about its own voice list. Azure reports the age and
+	 * region of its cache, and the device reports how many voices it found.
+	 */
+	private async renderProviderStatus(
+		el: HTMLElement,
+		instance: ProviderInstance,
+	): Promise<void> {
+		el.empty();
+		el.removeAttribute("title");
+		el.removeClass("t2ap-detect-warning");
+
+		if (this.plugin.isProviderLocked(instance.id)) {
+			el.addClass("t2ap-detect-warning");
+			el.setText("Encrypted. Unlock it to use these voices in this session.");
+			return;
+		}
+
+		const provider = this.plugin.providers.get(instance.id);
+		if (!provider) {
+			el.addClass("t2ap-detect-warning");
+			el.setText("This version has no implementation for this engine.");
+			return;
+		}
+
+		const status = await provider.voiceListStatus().catch(() => null);
+		if (!status) return;
+
+		el.setText(status.text);
+		el.toggleClass("t2ap-detect-warning", status.warning);
+		if (status.tooltip) el.setAttribute("title", status.tooltip);
+	}
+
+	private openProviderMenu(
 		position: { x: number; y: number },
-		profile: VoiceProfile,
-		index: number,
+		instance: ProviderInstance,
 	): void {
 		const menu = new Menu();
-		const { profiles } = this.plugin.settings;
 
 		menu.addItem((item) =>
 			item
 				.setTitle("Duplicate")
 				.setIcon("copy")
-				.onClick(() => void this.duplicate(profile, index)),
-		);
-
-		menu.addItem((item) =>
-			item
-				.setTitle("Move up")
-				.setIcon("arrow-up")
-				.setDisabled(index === 0)
-				.onClick(() => void this.move(index, -1)),
-		);
-
-		menu.addItem((item) =>
-			item
-				.setTitle("Move down")
-				.setIcon("arrow-down")
-				.setDisabled(index === profiles.length - 1)
-				.onClick(() => void this.move(index, 1)),
+				.onClick(() => void this.duplicateProvider(instance)),
 		);
 
 		menu.addSeparator();
@@ -465,10 +368,124 @@ export class SettingsTab extends PluginSettingTab {
 			item
 				.setTitle("Delete")
 				.setIcon("trash")
-				.onClick(() => void this.remove(profile)),
+				.onClick(() => void this.deleteProvider(instance)),
 		);
 
 		menu.showAtPosition(position);
+	}
+
+	private openProviderEditor(instance: ProviderInstance, isNew: boolean): void {
+		new ProviderEditorModal(
+			this.app,
+			this.plugin,
+			instance,
+			isNew,
+			async (result, passphrase) => {
+				await this.plugin.saveProvider(result, passphrase);
+				this.renderBody();
+			},
+		).open();
+	}
+
+	private async duplicateProvider(instance: ProviderInstance): Promise<void> {
+		// A locked provider holds no plain text to copy, so the copy starts empty
+		// rather than silently carrying a credential that is not there.
+		const locked = this.plugin.isProviderLocked(instance.id);
+		const copy = createProviderInstance(instance.type, {
+			name: uniqueProviderName(this.plugin.settings, `${instance.name} copy`),
+			config: { ...instance.config },
+			keyStorage: instance.keyStorage,
+		});
+
+		await this.plugin.saveProvider(copy, null);
+		this.renderBody();
+
+		if (locked) new Notice(`Copied "${instance.name}" without its credentials.`);
+	}
+
+	private async deleteProvider(instance: ProviderInstance): Promise<void> {
+		const orphaned = this.plugin.settings.profiles.filter(
+			(p) => p.providerId === instance.id,
+		).length;
+
+		await this.plugin.removeProvider(instance.id);
+		this.renderBody();
+
+		// The profiles keep pointing at the deleted id rather than being moved to
+		// another engine, so the user can add the provider back and recover them.
+		new Notice(
+			orphaned === 0
+				? `Deleted "${instance.name}".`
+				: `Deleted "${instance.name}". ${plural(orphaned, "profile")} now have no provider.`,
+		);
+	}
+
+	/** Refresh one provider and report the outcome, unlocking it if necessary. */
+	private async refreshOne(instance: ProviderInstance): Promise<void> {
+		// Locked means the credentials are present but unreadable. Asking for the
+		// passphrase is the right prompt, not "enter a speech key".
+		if (this.plugin.isProviderLocked(instance.id)) {
+			if (!(await this.plugin.unlockProvider(instance.id))) return;
+		}
+
+		const result = await this.refreshProvider(instance);
+		new Notice(
+			result.ok
+				? `${instance.name}: loaded ${result.count} voices.`
+				: `${instance.name}: ${refusal(result)}`,
+		);
+	}
+
+	/**
+	 * Refresh every provider that can be refreshed.
+	 *
+	 * Sequential rather than parallel: a handful of providers gain nothing from
+	 * overlapping, and parallel failures would interleave their messages. A
+	 * locked provider is skipped instead of chaining passphrase prompts, because
+	 * each one holds its own passphrase.
+	 */
+	private async refreshAll(btn: {
+		setDisabled(disabled: boolean): unknown;
+	}): Promise<void> {
+		btn.setDisabled(true);
+		const failures: string[] = [];
+		let refreshed = 0;
+		let skipped = 0;
+
+		try {
+			for (const instance of this.plugin.settings.providers) {
+				const result = await this.refreshProvider(instance);
+				if (result.ok) refreshed++;
+				else if (result.reason === "failed") failures.push(instance.name);
+				else skipped++;
+			}
+		} finally {
+			btn.setDisabled(false);
+			this.renderBody();
+		}
+
+		const parts = [`Refreshed ${plural(refreshed, "provider")}.`];
+		if (skipped > 0) parts.push(`Skipped ${skipped} locked or not configured.`);
+		if (failures.length > 0) parts.push(`Failed: ${failures.join(", ")}.`);
+		new Notice(parts.join(" "));
+	}
+
+	/** Silent on purpose: the caller decides how to report one or many. */
+	private async refreshProvider(instance: ProviderInstance): Promise<RefreshResult> {
+		if (this.plugin.isProviderLocked(instance.id)) {
+			return { ok: false, reason: "locked" };
+		}
+
+		const provider = this.plugin.providers.get(instance.id);
+		if (!provider) return { ok: false, reason: "missing" };
+		if (!provider.isConfigured()) return { ok: false, reason: "not-configured" };
+
+		try {
+			const voices = await provider.refreshVoices();
+			return { ok: true, count: voices.length };
+		} catch (error) {
+			return { ok: false, reason: "failed", error };
+		}
 	}
 
 	private renderOutput(container: HTMLElement): void {
@@ -497,6 +514,8 @@ export class SettingsTab extends PluginSettingTab {
 					text.inputEl.parentElement?.createDiv({ cls: "t2ap-field-error" }) ?? null;
 			});
 
+		this.renderDefaultFormat(container);
+
 		new Setting(container)
 			.setName("Insert player at cursor")
 			.setDesc("After saving, insert an audio player where the cursor is.")
@@ -508,6 +527,36 @@ export class SettingsTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+	}
+
+	/**
+	 * The format a profile writes when it has none of its own.
+	 *
+	 * The options are what the configured engines can write, so no engine is
+	 * named here. Nothing is drawn when none of them writes a file, which is the
+	 * same rule the profile editor applies.
+	 */
+	private renderDefaultFormat(container: HTMLElement): void {
+		const options: Record<string, string> = {};
+		for (const provider of this.plugin.providers.all()) {
+			if (provider.kind === "rendering") {
+				Object.assign(options, provider.audioFormatOptions());
+			}
+		}
+		if (Object.keys(options).length === 0) return;
+
+		new Setting(container)
+			.setName("Default audio format")
+			.setDesc("Used when saving to a file. Individual profiles can override this.")
+			.addDropdown((dd) => {
+				dd.addOption("", "Provider default");
+				dd.addOptions(options)
+					.setValue(this.plugin.settings.output.defaultFormat)
+					.onChange(async (value) => {
+						this.plugin.settings.output.defaultFormat = value;
+						await this.plugin.saveSettings();
+					});
+			});
 	}
 
 	private renderReading(container: HTMLElement): void {
@@ -558,9 +607,137 @@ export class SettingsTab extends PluginSettingTab {
 			);
 	}
 
+	private renderProfiles(container: HTMLElement): void {
+		new Setting(container)
+			.setName("Voice profiles")
+			.setDesc(
+				"Saved combinations of language, voice and delivery. The order here " +
+					"is the priority used when more than one profile matches.",
+			)
+			.setHeading()
+			.addButton((btn) =>
+				btn
+					.setButtonText("Add profile")
+					.setCta()
+					.onClick(() => this.openEditor(createProfile(), true)),
+			);
+
+		const { profiles, defaultProfileId } = this.plugin.settings;
+
+		if (profiles.length === 0) {
+			container.createEl("p", {
+				cls: "setting-item-description",
+				text: "No profiles yet. Add one to start reading notes aloud.",
+			});
+			return;
+		}
+
+		profiles.forEach((profile, index) => {
+			this.renderProfileRow(container, profile, index, defaultProfileId);
+		});
+	}
+
+	private renderProfileRow(
+		container: HTMLElement,
+		profile: VoiceProfile,
+		index: number,
+		defaultProfileId: string | null,
+	): void {
+		const isDefault = profile.id === defaultProfileId;
+		const setting = new Setting(container)
+			.setName(isDefault ? `${profile.name} (default)` : profile.name)
+			.setDesc(this.describeProfile(profile));
+
+		setting.settingEl.addClass("t2ap-profile-row");
+		if (isDefault) setting.settingEl.addClass("t2ap-profile-default");
+		// A profile whose provider was deleted cannot speak. Mark it here rather
+		// than leaving the user to discover it the next time they press play.
+		if (!this.plugin.providers.get(profile.providerId)) {
+			setting.settingEl.addClass("t2ap-profile-orphan");
+		}
+
+		if (!isDefault) {
+			setting.addExtraButton((btn) =>
+				btn
+					.setIcon("star")
+					.setTooltip("Make default")
+					.onClick(() => void this.setDefault(profile.id)),
+			);
+		}
+
+		setting.addExtraButton((btn) =>
+			btn
+				.setIcon("play")
+				.setTooltip("Preview")
+				.onClick(() => void this.preview(profile)),
+		);
+
+		setting.addExtraButton((btn) =>
+			btn
+				.setIcon("pencil")
+				.setTooltip("Edit")
+				.onClick(() => this.openEditor({ ...profile }, false)),
+		);
+
+		setting.addExtraButton((btn) =>
+			btn
+				.setIcon("more-vertical")
+				.setTooltip("More")
+				.onClick(() => {
+					// addExtraButton's handler receives no event, so anchor the
+					// menu to the button's own position instead.
+					const rect = btn.extraSettingsEl.getBoundingClientRect();
+					this.openRowMenu({ x: rect.left, y: rect.bottom }, profile, index);
+				}),
+		);
+	}
+
+	private openRowMenu(
+		position: { x: number; y: number },
+		profile: VoiceProfile,
+		index: number,
+	): void {
+		const menu = new Menu();
+		const { profiles } = this.plugin.settings;
+
+		menu.addItem((item) =>
+			item
+				.setTitle("Duplicate")
+				.setIcon("copy")
+				.onClick(() => void this.duplicate(profile, index)),
+		);
+
+		menu.addItem((item) =>
+			item
+				.setTitle("Move up")
+				.setIcon("arrow-up")
+				.setDisabled(index === 0)
+				.onClick(() => void this.move(index, -1)),
+		);
+
+		menu.addItem((item) =>
+			item
+				.setTitle("Move down")
+				.setIcon("arrow-down")
+				.setDisabled(index === profiles.length - 1)
+				.onClick(() => void this.move(index, 1)),
+		);
+
+		menu.addSeparator();
+
+		menu.addItem((item) =>
+			item
+				.setTitle("Delete")
+				.setIcon("trash")
+				.onClick(() => void this.remove(profile)),
+		);
+
+		menu.showAtPosition(position);
+	}
+
 	private describeProfile(profile: VoiceProfile): string {
-		const provider = this.plugin.providers.get(profile.provider);
-		const bits = [profile.locale, provider?.displayName ?? profile.provider];
+		const instance = findProviderInstance(this.plugin.settings, profile.providerId);
+		const bits = [profile.locale, instance?.name ?? "provider missing"];
 		if (profile.style) bits.push(profile.style);
 		if (profile.outputFolder) bits.push(`→ ${profile.outputFolder}`);
 
@@ -577,14 +754,14 @@ export class SettingsTab extends PluginSettingTab {
 
 			this.plugin.settings.defaultProfileId ??= result.id;
 			await this.plugin.saveSettings();
-			this.display();
+			this.renderBody();
 		}).open();
 	}
 
 	private async setDefault(id: string): Promise<void> {
 		this.plugin.settings.defaultProfileId = id;
 		await this.plugin.saveSettings();
-		this.display();
+		this.renderBody();
 	}
 
 	private async preview(profile: VoiceProfile): Promise<void> {
@@ -597,7 +774,7 @@ export class SettingsTab extends PluginSettingTab {
 		const copy = createProfile({ ...rest, name: `${profile.name} copy` });
 		this.plugin.settings.profiles.splice(index + 1, 0, copy);
 		await this.plugin.saveSettings();
-		this.display();
+		this.renderBody();
 	}
 
 	private async move(index: number, delta: number): Promise<void> {
@@ -609,7 +786,7 @@ export class SettingsTab extends PluginSettingTab {
 		profiles[index] = displaced;
 		profiles[target] = moved;
 		await this.plugin.saveSettings();
-		this.display();
+		this.renderBody();
 	}
 
 	private async remove(profile: VoiceProfile): Promise<void> {
@@ -621,7 +798,24 @@ export class SettingsTab extends PluginSettingTab {
 		}
 
 		await this.plugin.saveSettings();
-		this.display();
+		this.renderBody();
 		new Notice(`Deleted "${profile.name}".`);
+	}
+}
+
+function plural(count: number, noun: string): string {
+	return count === 1 ? `1 ${noun}` : `${count} ${noun}s`;
+}
+
+function refusal(result: Extract<RefreshResult, { ok: false }>): string {
+	switch (result.reason) {
+		case "locked":
+			return "still encrypted.";
+		case "missing":
+			return "this version has no implementation for this engine.";
+		case "not-configured":
+			return "add its credentials first.";
+		case "failed":
+			return userMessage(result.error);
 	}
 }

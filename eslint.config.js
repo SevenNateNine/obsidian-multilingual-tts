@@ -71,9 +71,11 @@ export default tseslint.config(
 		rules: CORE_IMPORT_BOUNDARY,
 	},
 	{
-		// Obsidian settings screens are one long declarative builder chain per
-		// tab. Splitting them to satisfy a line budget hurts more than it helps.
-		files: ["src/ui/SettingsTab.ts", "src/ui/ProfileEditorModal.ts"],
+		// The profile editor is one long declarative builder chain. Splitting it
+		// to satisfy a line budget would hurt more than it helps. The settings tab
+		// no longer needs this: splitting it into two tabs broke it into sections
+		// that each fit the budget.
+		files: ["src/ui/ProfileEditorModal.ts"],
 		rules: { "max-lines-per-function": "off" },
 	},
 	{

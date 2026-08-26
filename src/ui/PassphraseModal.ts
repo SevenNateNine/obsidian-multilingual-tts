@@ -2,6 +2,8 @@ import { App, Modal, Setting, type ButtonComponent } from "obsidian";
 
 export interface PassphraseModalOptions {
 	mode: "unlock" | "create";
+	/** The provider being unlocked, named so several are told apart. */
+	subject: string;
 	/**
 	 * Check the passphrase. Return an error to show in the dialog, or null to
 	 * accept it and close. Verification lives with the caller, so a wrong
@@ -12,10 +14,10 @@ export interface PassphraseModalOptions {
 }
 
 /**
- * Asks for the passphrase that protects the Azure speech key.
+ * Asks for the passphrase that protects one provider's credentials.
  *
- * `unlock` reads an existing key. `create` sets a new passphrase and asks for it
- * twice, because a typo in a write-only field is unrecoverable.
+ * `unlock` reads existing credentials. `create` sets a new passphrase and asks
+ * for it twice, because a typo in a write-only field is unrecoverable.
  */
 export class PassphraseModal extends Modal {
 	private readonly options: PassphraseModalOptions;
@@ -35,7 +37,9 @@ export class PassphraseModal extends Modal {
 
 	override onOpen(): void {
 		const creating = this.options.mode === "create";
-		this.titleEl.setText(creating ? "Set a passphrase" : "Unlock the speech key");
+		this.titleEl.setText(
+			creating ? "Set a passphrase" : `Unlock ${this.options.subject}`,
+		);
 		this.render();
 	}
 
@@ -55,10 +59,11 @@ export class PassphraseModal extends Modal {
 			cls: "setting-item-description",
 			text:
 				this.options.mode === "create"
-					? "The key is encrypted with this passphrase. Nobody can recover it " +
-						"if you forget it, and you must paste the key again from Azure."
-					: "The stored key is encrypted. Enter the passphrase to use Azure " +
-						"voices in this session.",
+					? `The credentials of ${this.options.subject} are encrypted with this ` +
+						"passphrase. Nobody can recover them if you forget it, and you must " +
+						"paste them again."
+					: `The stored credentials of ${this.options.subject} are encrypted. ` +
+						"Enter the passphrase to use it in this session.",
 		});
 
 		this.addField(contentEl, "Passphrase", (value) => {

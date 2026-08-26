@@ -80,6 +80,7 @@ class FakeSink implements AudioSink {
 class FakeRenderer implements RenderingProvider {
 	readonly kind = "rendering" as const;
 	readonly id = "azure" as const;
+	readonly type = "azure" as const;
 	readonly displayName = "Fake renderer";
 	readonly maxChunkChars = 10;
 	readonly calls: string[] = [];
@@ -93,6 +94,16 @@ class FakeRenderer implements RenderingProvider {
 	async listVoices(): Promise<[]> {
 		return [];
 	}
+	async refreshVoices(): Promise<[]> {
+		return [];
+	}
+	async voiceListStatus(): Promise<null> {
+		return null;
+	}
+	audioFormatOptions(): Record<string, string> {
+		return { mp3: "MP3" };
+	}
+
 	outputFormat(): OutputFormatInfo {
 		return MP3;
 	}
@@ -109,6 +120,7 @@ class FakeRenderer implements RenderingProvider {
 class FakeSpeaker implements SpeakingProvider {
 	readonly kind = "speaking" as const;
 	readonly id = "system" as const;
+	readonly type = "system" as const;
 	readonly displayName = "Fake speaker";
 	readonly maxChunkChars = 10;
 	readonly calls: string[] = [];
@@ -121,6 +133,12 @@ class FakeSpeaker implements SpeakingProvider {
 	}
 	async listVoices(): Promise<[]> {
 		return [];
+	}
+	async refreshVoices(): Promise<[]> {
+		return [];
+	}
+	async voiceListStatus(): Promise<null> {
+		return null;
 	}
 
 	/** When true, an utterance runs until the signal aborts it. */

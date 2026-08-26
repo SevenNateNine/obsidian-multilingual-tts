@@ -1,20 +1,18 @@
 import { Editor, MarkdownView, Notice, Plugin, TFile } from "obsidian";
 import {
+	configValue,
+	findProviderInstance,
 	resolveDefaultProfile,
 	type PluginSettings,
+	type ProviderInstance,
 	type VoiceProfile,
 } from "./core/settings/types";
 import { starterProfile } from "./core/usecases/starterProfile";
 import { SettingsStore } from "./core/settings/SettingsStore";
 import { migrateSettings } from "./core/settings/migrations";
-import {
-	decodeKey,
-	isKeyLocked,
-	nextStoredKey,
-	storedKeyMode,
-	type KeyStorage,
-} from "./core/settings/secret";
+import { SecretVault } from "./core/settings/SecretVault";
 import { ProviderRegistry } from "./core/tts/registry";
+import { secretFields } from "./core/tts/providerTypes";
 import { AudioPlayer } from "./core/audio/AudioPlayer";
 import type { RenderProgress } from "./core/audio/renderToFile";
 import { describeSelection, shouldAnnounce } from "./core/text/detectLanguage";
@@ -29,7 +27,7 @@ import { AzureProvider } from "./adapters/azure/AzureProvider";
 import { HtmlAudioSink } from "./adapters/HtmlAudioSink";
 import { francDetector } from "./adapters/francDetector";
 import { ObsidianAudioStore, fileAtPath } from "./adapters/obsidian/ObsidianAudioStore";
-import { ObsidianCatalogStore } from "./adapters/obsidian/ObsidianCatalogStore";
+import { CatalogCacheFile } from "./adapters/obsidian/CatalogCacheFile";
 import { obsidianFetcher } from "./adapters/obsidian/obsidianFetcher";
 import { getReadableText } from "./adapters/obsidian/editorText";
 import { SettingsTab } from "./ui/SettingsTab";
@@ -52,23 +50,16 @@ export default class MultilingualTtsPlugin extends Plugin {
 	private audioStore!: ObsidianAudioStore;
 	/** Held concretely: the starter profile reads the platform default voice. */
 	private system!: SystemProvider;
-	/** Held concretely: the Azure settings block drives its catalog directly. */
-	private azure!: AzureProvider;
+	private catalogCache!: CatalogCacheFile;
+
+	/**
+	 * The at-rest form of every provider credential, and which of them are still
+	 * locked. The plain text lives in each instance's config while we run.
+	 */
+	private readonly secrets = new SecretVault();
 
 	private statusBar: HTMLElement | null = null;
 	private renderAbort: AbortController | null = null;
-
-	/**
-	 * The speech key exactly as data.json holds it. Kept so that a save made
-	 * before the first unlock can write the encrypted value back untouched,
-	 * rather than replacing a key nobody has read yet with an empty string.
-	 */
-	private storedKey = "";
-	/** Session only. Never persisted, and dropped when Obsidian closes. */
-	private passphrase: string | null = null;
-	private locked = false;
-	/** The plain text `storedKey` was built from. See `keyForDisk`. */
-	private encodedFrom: string | null = null;
 
 	override async onload(): Promise<void> {
 		await this.loadSettings();
@@ -154,130 +145,164 @@ export default class MultilingualTtsPlugin extends Plugin {
 			}),
 		);
 
-		this.addSettingTab(new SettingsTab(this.app, this, this.azure));
+		this.addSettingTab(new SettingsTab(this.app, this));
 	}
 
 	override onunload(): void {
 		this.player.destroy();
 	}
 
+	/**
+	 * Build one provider per configured instance.
+	 *
+	 * This factory is the only place that maps an engine name to a class, so a
+	 * new engine is one entry in `providerTypes.ts` and one branch here.
+	 *
+	 * The locals rather than `this` are deliberate: the config getter closes over
+	 * the small settings store, so a session-long provider does not retain the
+	 * plugin and its app reference.
+	 */
 	private createAdapters(): void {
 		const pluginDir =
 			this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
 
 		this.audioStore = new ObsidianAudioStore(this.app.vault);
 		this.system = new SystemProvider();
-
-		// The credentials getter closes over the small store, not over the plugin,
-		// so a session-long provider does not retain the app.
-		const store = this.store;
-		this.azure = new AzureProvider(
-			() => store.current.azure,
-			new ObsidianCatalogStore(this.app.vault.adapter, `${pluginDir}/voice-cache.json`),
-			obsidianFetcher,
+		this.catalogCache = new CatalogCacheFile(
+			this.app.vault.adapter,
+			`${pluginDir}/voice-cache.json`,
 		);
 
-		this.providers = new ProviderRegistry([this.system, this.azure]);
+		const system = this.system;
+		const catalog = this.catalogCache;
+		const store = this.store;
+
+		this.providers = new ProviderRegistry((instance) =>
+			instance.type === "system"
+				? system
+				: new AzureProvider(
+						instance.id,
+						() => findProviderInstance(store.current, instance.id)?.config ?? {},
+						catalog.scoped(instance.id),
+						obsidianFetcher,
+					),
+		);
+		this.providers.sync(this.settings.providers);
 	}
 
 	async loadSettings(): Promise<void> {
 		this.settings = migrateSettings(await this.loadData());
-		await this.readStoredKey();
 		// Same object on both sides: PluginSettingTab reads `plugin.settings`.
 		this.store = new SettingsStore(this.settings, (s) => this.persist(s));
+		await this.readStoredSecrets();
 	}
 
 	async saveSettings(): Promise<void> {
 		await this.store.save();
 	}
 
-	/**
-	 * Turn the key on disk into the plain text the rest of the plugin uses.
-	 *
-	 * An encrypted key stays locked until the user gives the passphrase. A
-	 * damaged value must not stop the plugin from loading, because system voices
-	 * do not need Azure at all.
-	 */
-	private async readStoredKey(): Promise<void> {
-		this.storedKey = this.settings.azure.key;
-		this.settings.azure.key = "";
-		this.locked = isKeyLocked(this.storedKey);
-		if (this.locked) return;
+	/** Apply an edit to the provider list, then persist it. */
+	async saveProviders(): Promise<void> {
+		this.providers.sync(this.settings.providers);
+		await this.saveSettings();
+	}
 
-		try {
-			this.settings.azure.key = await decodeKey(this.storedKey, null);
-			this.encodedFrom = this.settings.azure.key;
-		} catch (err) {
-			new Notice(userMessage(err));
-			console.error("[multilingual-tts] could not read the stored speech key", err);
+	/** Delete a provider, its session secrets, and its cached voice list. */
+	async removeProvider(id: string): Promise<void> {
+		this.settings.providers = this.settings.providers.filter((p) => p.id !== id);
+		this.secrets.forget(id);
+		await this.catalogCache.forget(id);
+		await this.saveProviders();
+	}
+
+	/**
+	 * Turn each credential on disk into the plain text the rest of the plugin uses.
+	 *
+	 * An encrypted value stays locked until the user gives its passphrase. A
+	 * damaged one must not stop the plugin from loading, because the device
+	 * voices need no credential at all.
+	 */
+	private async readStoredSecrets(): Promise<void> {
+		for (const instance of this.settings.providers) {
+			for (const field of secretFields(instance.type)) {
+				const stored = configValue(instance.config, field.key);
+				try {
+					instance.config[field.key] = await this.secrets.adopt(
+						instance.id,
+						field.key,
+						stored,
+					);
+				} catch (err) {
+					instance.config[field.key] = "";
+					new Notice(`${instance.name}: ${userMessage(err)}`);
+					console.error("[multilingual-tts] could not read a stored credential", err);
+				}
+			}
 		}
 	}
 
 	/**
-	 * Write settings with the key in its at-rest form.
+	 * Write settings with every credential in its at-rest form.
 	 *
-	 * Nothing is written when the key cannot be encoded. A failed save keeps the
+	 * Nothing is written when one cannot be encoded. A failed save keeps the
 	 * previous file, which is the safe outcome for a credential.
 	 */
 	private async persist(settings: PluginSettings): Promise<void> {
 		try {
-			const key = await this.keyForDisk();
-			await this.saveData({ ...settings, azure: { ...settings.azure, key } });
+			const providers = await this.providersForDisk(settings);
+			await this.saveData({ ...settings, providers });
 		} catch (err) {
 			new Notice(userMessage(err));
 			console.error("[multilingual-tts] could not save settings", err);
 		}
 	}
 
-	/**
-	 * Encode the key once per change, not once per save.
-	 *
-	 * Every settings edit saves the whole file, and PBKDF2 is deliberately slow.
-	 * Without this, changing the region or a profile would re-derive the key.
-	 */
-	private async keyForDisk(): Promise<string> {
-		const { key, keyStorage } = this.settings.azure;
-		const unchanged =
-			key === this.encodedFrom && storedKeyMode(this.storedKey) === keyStorage;
-		if (unchanged && !this.locked) return this.storedKey;
+	private async providersForDisk(
+		settings: PluginSettings,
+	): Promise<ProviderInstance[]> {
+		const encoded: ProviderInstance[] = [];
 
-		this.storedKey = await nextStoredKey({
-			stored: this.storedKey,
-			plaintext: key,
-			mode: keyStorage,
-			passphrase: this.passphrase,
-			locked: this.locked,
-		});
-		this.encodedFrom = key;
-		return this.storedKey;
+		for (const instance of settings.providers) {
+			const config = { ...instance.config };
+			for (const field of secretFields(instance.type)) {
+				config[field.key] = await this.secrets.forDisk(
+					instance.id,
+					field.key,
+					instance.keyStorage,
+				);
+			}
+			encoded.push({ ...instance, config });
+		}
+		return encoded;
 	}
 
-	/** True when an encrypted key is waiting for its passphrase. */
-	isAzureKeyLocked(): boolean {
-		return this.locked;
+	/** True when a provider's credentials are waiting for their passphrase. */
+	isProviderLocked(id: string): boolean {
+		return this.secrets.isLocked(id);
 	}
 
 	/**
-	 * Ask for the passphrase and decrypt the stored key.
+	 * Ask for the passphrase and decrypt one provider's credentials.
 	 *
-	 * Returns false when the key is still locked, which means the user closed the
+	 * Returns false when it is still locked, which means the user closed the
 	 * dialog. The caller stops without a message in that case.
 	 */
-	async unlockAzureKey(): Promise<boolean> {
-		if (!this.locked) return true;
+	async unlockProvider(id: string): Promise<boolean> {
+		if (!this.secrets.isLocked(id)) return true;
+
+		const instance = findProviderInstance(this.settings, id);
+		if (!instance) return false;
 
 		return new Promise<boolean>((resolve) => {
 			new PassphraseModal(this.app, {
 				mode: "unlock",
+				subject: instance.name,
 				onSubmit: async (passphrase) => {
 					try {
-						this.settings.azure.key = await decodeKey(this.storedKey, passphrase);
+						Object.assign(instance.config, await this.secrets.unlock(id, passphrase));
 					} catch (err) {
 						return userMessage(err);
 					}
-					this.passphrase = passphrase;
-					this.encodedFrom = this.settings.azure.key;
-					this.locked = false;
 					resolve(true);
 					return null;
 				},
@@ -286,29 +311,55 @@ export default class MultilingualTtsPlugin extends Plugin {
 		});
 	}
 
-	/**
-	 * Replace the key in memory. A newly typed key is plain text, so it replaces
-	 * whatever was stored and nothing stays locked. The caller then saves.
-	 */
-	setAzureKeyValue(key: string): void {
-		this.settings.azure.key = key;
-		this.locked = false;
+	/** True when this session can already encrypt for a provider. */
+	hasProviderPassphrase(id: string): boolean {
+		return this.secrets.hasPassphrase(id);
 	}
 
 	/**
-	 * Change how the key is written to disk. `passphrase` is the new passphrase
-	 * for the passphrase mode, and null for the two modes that need none.
+	 * Insert or replace a provider, with its credentials in the clear.
+	 *
+	 * `passphrase` is the new one for a provider entering passphrase mode, and
+	 * null when this session already holds it or the mode needs none. It is never
+	 * cleared: `encodeKey` ignores it in the two modes that do not encrypt.
+	 *
+	 * The registry is rebuilt before the save, because a new provider needs an
+	 * implementation and an edited one may point at different credentials.
 	 */
-	async setKeyStorage(mode: KeyStorage, passphrase: string | null): Promise<void> {
-		this.settings.azure.keyStorage = mode;
-		this.passphrase = passphrase;
-		await this.saveSettings();
+	async saveProvider(
+		instance: ProviderInstance,
+		passphrase: string | null,
+	): Promise<void> {
+		const { providers } = this.settings;
+		const index = providers.findIndex((p) => p.id === instance.id);
+		if (index >= 0) providers[index] = instance;
+		else providers.push(instance);
+
+		// A locked provider offers Unlock instead of its credential fields, so the
+		// draft carries only empty placeholders. Taking them would clear the lock
+		// and replace a key nobody has read yet with an empty string.
+		if (!this.secrets.isLocked(instance.id)) {
+			for (const field of secretFields(instance.type)) {
+				this.secrets.setPlaintext(
+					instance.id,
+					field.key,
+					configValue(instance.config, field.key),
+				);
+			}
+		}
+		if (passphrase !== null) this.secrets.setPassphrase(instance.id, passphrase);
+
+		await this.saveProviders();
 	}
 
-	/** Azure needs its key in the clear. No other engine does. */
+	/**
+	 * A provider with encrypted credentials needs them in the clear first.
+	 *
+	 * A profile naming a provider that no longer exists passes through here and
+	 * is refused further down, where the message can say so.
+	 */
 	private async unlocked(profile: VoiceProfile): Promise<boolean> {
-		if (profile.provider !== "azure") return true;
-		return this.unlockAzureKey();
+		return this.unlockProvider(profile.providerId);
 	}
 
 	private async ensureStarterProfile(): Promise<void> {
@@ -496,7 +547,9 @@ function failureMessage(outcome: Refused, verb: "read" | "convert"): string | nu
 		case "no-profile":
 			return "No voice profile configured yet.";
 		case "unknown-provider":
-			return `This profile uses an unknown engine: ${outcome.detail}.`;
+			// The id is a generated one, so it means nothing to the reader. What
+			// matters is that the provider is gone and the profile needs a new one.
+			return "This profile's speech provider no longer exists. Pick another in settings.";
 		case "not-configured":
 			return `${outcome.detail} is not configured.`;
 		case "cannot-render":

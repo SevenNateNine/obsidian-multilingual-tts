@@ -2,7 +2,9 @@ import type {
 	SpeakingProvider,
 	SynthesisRequest,
 	VoiceInfo,
+	VoiceListStatus,
 } from "../../core/tts/types";
+import { SYSTEM_PROVIDER_ID } from "../../core/tts/providerTypes";
 import { TtsError, type TtsErrorKind } from "../../core/errors";
 
 /**
@@ -10,10 +12,13 @@ import { TtsError, type TtsErrorKind } from "../../core/errors";
  *
  * Free, offline, no API key, and available on Obsidian desktop and mobile. It
  * cannot hand back audio data, so profiles using it can play but not save.
+ *
+ * There is exactly one of these, at a fixed id: the device is the account.
  */
 export class SystemProvider implements SpeakingProvider {
 	readonly kind = "speaking" as const;
-	readonly id = "system" as const;
+	readonly type = "system" as const;
+	readonly id = SYSTEM_PROVIDER_ID;
 	readonly displayName = "System voices";
 
 	/**
@@ -35,6 +40,33 @@ export class SystemProvider implements SpeakingProvider {
 			// The picker marks the platform default so the user can find it.
 			displayName: v.default ? `${v.name} (default)` : v.name,
 		}));
+	}
+
+	/**
+	 * Ask the platform again, for a voice installed since Obsidian started.
+	 *
+	 * The enumeration is cached in a promise, so dropping it is the whole of a
+	 * refresh. There is no remote catalog and nothing to invalidate on disk.
+	 */
+	async refreshVoices(): Promise<VoiceInfo[]> {
+		this.voicesPromise = null;
+		return this.listVoices();
+	}
+
+	async voiceListStatus(): Promise<VoiceListStatus> {
+		if (!this.isConfigured()) {
+			return { text: "This device has no speech engine.", warning: true };
+		}
+
+		const voices = await this.listVoices();
+		const locales = new Set(voices.map((v) => v.locale)).size;
+		return {
+			text:
+				voices.length === 0
+					? "No voices installed on this device."
+					: `${voices.length} voices across ${locales} languages on this device`,
+			warning: voices.length === 0,
+		};
 	}
 
 	/**

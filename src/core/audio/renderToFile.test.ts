@@ -30,6 +30,7 @@ const bytesOf = (buffer: ArrayBuffer) => Array.from(new Uint8Array(buffer));
 class FakeProvider implements RenderingProvider {
 	readonly kind = "rendering" as const;
 	readonly id = "azure" as const;
+	readonly type = "azure" as const;
 	readonly displayName = "Fake";
 	readonly calls: string[] = [];
 
@@ -47,6 +48,16 @@ class FakeProvider implements RenderingProvider {
 
 	async listVoices(): Promise<[]> {
 		return [];
+	}
+	async refreshVoices(): Promise<[]> {
+		return [];
+	}
+	async voiceListStatus(): Promise<null> {
+		return null;
+	}
+
+	audioFormatOptions(): Record<string, string> {
+		return { mp3: "MP3" };
 	}
 
 	outputFormat(): OutputFormatInfo {
