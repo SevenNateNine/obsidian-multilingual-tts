@@ -3,7 +3,7 @@ import type {
 	SynthesisRequest,
 	VoiceInfo,
 } from "../../core/tts/types";
-import { TtsError } from "../../core/errors";
+import { TtsError, type TtsErrorKind } from "../../core/errors";
 
 /**
  * Platform voices via the Web Speech API.
@@ -94,9 +94,8 @@ export class SystemProvider implements SpeakingProvider {
 					finish(() => reject(new TtsError("cancelled", "aborted")));
 					return;
 				}
-				finish(() =>
-					reject(new TtsError("unknown", "Speech synthesis failed", event.error)),
-				);
+				const { kind, detail } = mapSpeechErrorCode(event.error);
+				finish(() => reject(new TtsError(kind, "Speech synthesis failed", detail)));
 			};
 
 			signal.addEventListener("abort", onAbort, { once: true });
@@ -159,4 +158,55 @@ function toVoiceInfo(voice: SpeechSynthesisVoice): VoiceInfo {
 function clamp(value: number, min: number, max: number): number {
 	if (!Number.isFinite(value)) return min;
 	return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Translate a `SpeechSynthesisErrorEvent.error` code into a kind and a
+ * human-readable detail.
+ *
+ * `canceled` and `interrupted` are handled by the caller before this runs.
+ * An unrecognized code keeps kind `unknown` and surfaces the raw code as the
+ * detail, so a future or browser-specific code is still visible rather than
+ * silently swallowed.
+ */
+export function mapSpeechErrorCode(code: string): {
+	kind: TtsErrorKind;
+	detail: string;
+} {
+	switch (code) {
+		case "not-allowed":
+			return {
+				kind: "blocked",
+				detail:
+					"the browser blocked speech playback, often because it needs a click in the document first",
+			};
+		case "audio-busy":
+			return { kind: "blocked", detail: "the system audio device is busy" };
+		case "audio-hardware":
+			return { kind: "blocked", detail: "no audio output device is available" };
+		case "language-unavailable":
+			return {
+				kind: "no-voice",
+				detail: "this voice does not support the selected language",
+			};
+		case "voice-unavailable":
+			return { kind: "no-voice", detail: "the selected voice is not available" };
+		case "text-too-long":
+			return {
+				kind: "invalid-request",
+				detail: "the selection is too long for the system speech engine",
+			};
+		case "invalid-argument":
+			return {
+				kind: "invalid-request",
+				detail: "the system speech engine rejected the request",
+			};
+		case "network":
+			return {
+				kind: "network",
+				detail: "the system speech engine lost its network connection",
+			};
+		default:
+			return { kind: "unknown", detail: code };
+	}
 }

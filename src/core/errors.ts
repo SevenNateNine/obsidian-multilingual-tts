@@ -13,6 +13,9 @@ export type TtsErrorKind =
 	| "network"
 	| "invalid-request"
 	| "no-voice"
+	| "playback"
+	| "corrupt-audio"
+	| "blocked"
 	| "cancelled"
 	| "unknown";
 
@@ -49,6 +52,10 @@ const MESSAGES: Record<TtsErrorKind, string> = {
 	network: "Couldn't reach the speech service. Check your connection.",
 	"invalid-request": "The speech service rejected the request.",
 	"no-voice": "The voice this profile uses isn't available.",
+	playback: "The audio was generated, but could not play.",
+	"corrupt-audio":
+		"The speech service returned audio that could not be used. Try again.",
+	blocked: "Speech playback was blocked. Try again after clicking into the note.",
 	cancelled: "Playback stopped.",
 	unknown: "Speech synthesis failed.",
 };
