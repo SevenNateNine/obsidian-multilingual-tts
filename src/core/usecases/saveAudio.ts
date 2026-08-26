@@ -1,6 +1,10 @@
 import type { AudioStore } from "../ports";
 import type { ProviderRegistry } from "../tts/registry";
-import type { PluginSettings, VoiceProfile } from "../settings/types";
+import {
+	resolveAudioFormat,
+	type PluginSettings,
+	type VoiceProfile,
+} from "../settings/types";
 import { renderToFile, type RenderProgress } from "../audio/renderToFile";
 import { resolveOutputFolder } from "../paths";
 import { isCancellation } from "../errors";
@@ -31,9 +35,9 @@ export async function saveAudio(
 	req: SaveRequest,
 	onProgress?: (progress: RenderProgress) => void,
 ): Promise<SaveOutcome> {
-	const provider = deps.providers.get(req.profile.provider);
+	const provider = deps.providers.get(req.profile.providerId);
 	if (!provider) {
-		return { ok: false, reason: "unknown-provider", detail: req.profile.provider };
+		return { ok: false, reason: "unknown-provider", detail: req.profile.providerId };
 	}
 	if (provider.kind !== "rendering") {
 		return { ok: false, reason: "cannot-render", detail: provider.displayName };
@@ -45,10 +49,17 @@ export async function saveAudio(
 	const text = prepareForSpeech(deps.settings, req.rawText);
 	if (!text) return { ok: false, reason: "empty-text" };
 
+	// The profile carries a format only when it overrides the global one, so
+	// the choice is resolved here rather than in each provider.
+	const profile: VoiceProfile = {
+		...req.profile,
+		audioFormat: resolveAudioFormat(req.profile, deps.settings),
+	};
+
 	try {
 		const rendered = await renderToFile(
 			provider,
-			req.profile,
+			profile,
 			text,
 			req.signal,
 			onProgress,

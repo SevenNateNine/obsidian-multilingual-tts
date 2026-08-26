@@ -2,18 +2,23 @@ import type {
 	SpeakingProvider,
 	SynthesisRequest,
 	VoiceInfo,
+	VoiceListStatus,
 } from "../../core/tts/types";
-import { TtsError } from "../../core/errors";
+import { SYSTEM_PROVIDER_ID } from "../../core/tts/providerTypes";
+import { TtsError, type TtsErrorKind } from "../../core/errors";
 
 /**
  * Platform voices via the Web Speech API.
  *
  * Free, offline, no API key, and available on Obsidian desktop and mobile. It
  * cannot hand back audio data, so profiles using it can play but not save.
+ *
+ * There is exactly one of these, at a fixed id: the device is the account.
  */
 export class SystemProvider implements SpeakingProvider {
 	readonly kind = "speaking" as const;
-	readonly id = "system" as const;
+	readonly type = "system" as const;
+	readonly id = SYSTEM_PROVIDER_ID;
 	readonly displayName = "System voices";
 
 	/**
@@ -35,6 +40,33 @@ export class SystemProvider implements SpeakingProvider {
 			// The picker marks the platform default so the user can find it.
 			displayName: v.default ? `${v.name} (default)` : v.name,
 		}));
+	}
+
+	/**
+	 * Ask the platform again, for a voice installed since Obsidian started.
+	 *
+	 * The enumeration is cached in a promise, so dropping it is the whole of a
+	 * refresh. There is no remote catalog and nothing to invalidate on disk.
+	 */
+	async refreshVoices(): Promise<VoiceInfo[]> {
+		this.voicesPromise = null;
+		return this.listVoices();
+	}
+
+	async voiceListStatus(): Promise<VoiceListStatus> {
+		if (!this.isConfigured()) {
+			return { text: "This device has no speech engine.", warning: true };
+		}
+
+		const voices = await this.listVoices();
+		const locales = new Set(voices.map((v) => v.locale)).size;
+		return {
+			text:
+				voices.length === 0
+					? "No voices installed on this device."
+					: `${voices.length} voices across ${locales} languages on this device`,
+			warning: voices.length === 0,
+		};
 	}
 
 	/**
@@ -94,9 +126,8 @@ export class SystemProvider implements SpeakingProvider {
 					finish(() => reject(new TtsError("cancelled", "aborted")));
 					return;
 				}
-				finish(() =>
-					reject(new TtsError("unknown", "Speech synthesis failed", event.error)),
-				);
+				const { kind, detail } = mapSpeechErrorCode(event.error);
+				finish(() => reject(new TtsError(kind, "Speech synthesis failed", detail)));
 			};
 
 			signal.addEventListener("abort", onAbort, { once: true });
@@ -159,4 +190,55 @@ function toVoiceInfo(voice: SpeechSynthesisVoice): VoiceInfo {
 function clamp(value: number, min: number, max: number): number {
 	if (!Number.isFinite(value)) return min;
 	return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Translate a `SpeechSynthesisErrorEvent.error` code into a kind and a
+ * human-readable detail.
+ *
+ * `canceled` and `interrupted` are handled by the caller before this runs.
+ * An unrecognized code keeps kind `unknown` and surfaces the raw code as the
+ * detail, so a future or browser-specific code is still visible rather than
+ * silently swallowed.
+ */
+export function mapSpeechErrorCode(code: string): {
+	kind: TtsErrorKind;
+	detail: string;
+} {
+	switch (code) {
+		case "not-allowed":
+			return {
+				kind: "blocked",
+				detail:
+					"the browser blocked speech playback, often because it needs a click in the document first",
+			};
+		case "audio-busy":
+			return { kind: "blocked", detail: "the system audio device is busy" };
+		case "audio-hardware":
+			return { kind: "blocked", detail: "no audio output device is available" };
+		case "language-unavailable":
+			return {
+				kind: "no-voice",
+				detail: "this voice does not support the selected language",
+			};
+		case "voice-unavailable":
+			return { kind: "no-voice", detail: "the selected voice is not available" };
+		case "text-too-long":
+			return {
+				kind: "invalid-request",
+				detail: "the selection is too long for the system speech engine",
+			};
+		case "invalid-argument":
+			return {
+				kind: "invalid-request",
+				detail: "the system speech engine rejected the request",
+			};
+		case "network":
+			return {
+				kind: "network",
+				detail: "the system speech engine lost its network connection",
+			};
+		default:
+			return { kind: "unknown", detail: code };
+	}
 }

@@ -4,7 +4,6 @@ import type { VoiceProfile } from "../core/settings/types";
 import type { VoiceInfo } from "../core/tts/types";
 import { languageSubtag } from "../core/text/languages";
 import { validateFolderPath } from "../core/paths";
-import { DEFAULT_AUDIO_FORMAT_ID, audioFormatOptions } from "../adapters/azure/formats";
 import { setButtonLabel } from "../adapters/obsidian/buttonLabel";
 
 const DEFAULT_PREVIEW_TEXT = "This is how this profile sounds.";
@@ -67,10 +66,10 @@ export class ProfileEditorModal extends Modal {
 	}
 
 	private async loadVoices(): Promise<void> {
-		const provider = this.plugin.providers.get(this.draft.provider);
+		const provider = this.plugin.providers.get(this.draft.providerId);
 		if (!provider) {
 			this.voices = [];
-			this.loadError = `Unknown engine: ${this.draft.provider}.`;
+			this.loadError = "This profile's provider no longer exists. Choose another.";
 			return;
 		}
 		try {
@@ -120,26 +119,32 @@ export class ProfileEditorModal extends Modal {
 		// which voices exist.
 		new Setting(contentEl).setName("Voice").setHeading();
 
-		// Offer only providers that can run, so Azure never appears as a dead
-		// option before a key is entered. The current provider of the profile is
-		// always included. An edit to an Azure profile after the key was removed
-		// then keeps that provider instead of a different one.
-		const providers = this.plugin.providers
-			.all()
-			.filter((p) => p.isConfigured() || p.id === this.draft.provider);
+		// Offer only providers that can run, so one missing its credentials never
+		// appears as a dead option. The profile's own provider is always included:
+		// an edit made after its key was removed keeps that provider instead of
+		// silently moving the profile to a different one.
+		const instances = this.plugin.settings.providers.filter(
+			(p) =>
+				this.plugin.providers.get(p.id)?.isConfigured() ||
+				p.id === this.draft.providerId,
+		);
+		const missing = !instances.some((p) => p.id === this.draft.providerId);
+
 		new Setting(contentEl)
 			.setName("Provider")
 			.setDesc(
-				providers.length > 1
+				instances.length > 1
 					? "Which speech engine produces the audio."
-					: "Azure becomes available once a speech key and region are set.",
+					: "Add a provider under Settings → Providers to use another engine.",
 			)
 			.addDropdown((dd) => {
-				for (const provider of providers) {
-					dd.addOption(provider.id, provider.displayName);
-				}
-				dd.setValue(this.draft.provider).onChange(async (value) => {
-					this.draft.provider = value as VoiceProfile["provider"];
+				// A deleted provider still has to appear, or the dropdown would show
+				// a different engine than the profile actually stores.
+				if (missing) dd.addOption(this.draft.providerId, "(provider missing)");
+				for (const instance of instances) dd.addOption(instance.id, instance.name);
+
+				dd.setValue(this.draft.providerId).onChange(async (value) => {
+					this.draft.providerId = value;
 					this.draft.voiceId = "";
 					this.draft.style = undefined;
 					this.draft.role = undefined;
@@ -191,24 +196,18 @@ export class ProfileEditorModal extends Modal {
 
 		new Setting(contentEl).setName("Output").setHeading();
 
-		// System voices speak directly and never produce a file, so format has
-		// no meaning for them.
-		if (this.draft.provider === "azure") {
-			new Setting(contentEl)
-				.setName("Audio format")
-				.setDesc("Used when saving to a file.")
-				.addDropdown((dd) =>
-					dd
-						.addOptions(audioFormatOptions())
-						.setValue(this.draft.audioFormat ?? DEFAULT_AUDIO_FORMAT_ID)
-						.onChange((value) => {
-							this.draft.audioFormat = value;
-						}),
-				);
+		// A speaking provider goes straight to the device and never produces a
+		// file, so a format has no meaning for it. Which formats exist is the
+		// provider's own answer, so no engine is named here.
+		const provider = this.plugin.providers.get(this.draft.providerId);
+		if (provider?.kind === "rendering") {
+			this.renderAudioFormat(contentEl, provider.audioFormatOptions());
 		} else {
 			contentEl.createEl("p", {
 				cls: "setting-item-description",
-				text: "System voices play through the device and cannot be saved to a file.",
+				text: provider
+					? `${provider.displayName} plays through the device and cannot be saved to a file.`
+					: "This profile has no working provider, so it cannot be saved to a file.",
 			});
 		}
 
@@ -268,6 +267,34 @@ export class ProfileEditorModal extends Modal {
 			});
 
 		actions.settingEl.addClass("t2ap-modal-actions");
+	}
+
+	/**
+	 * The empty value means inherit, the same as an empty save folder. A stored
+	 * format the provider no longer offers falls back to it.
+	 */
+	private renderAudioFormat(
+		container: HTMLElement,
+		options: Record<string, string>,
+	): void {
+		const global = this.plugin.settings.output.defaultFormat;
+		const globalLabel = options[global] ?? "the provider default";
+		const current =
+			this.draft.audioFormat && this.draft.audioFormat in options
+				? this.draft.audioFormat
+				: "";
+
+		new Setting(container)
+			.setName("Audio format")
+			.setDesc("Used when saving to a file.")
+			.addDropdown((dd) => {
+				dd.addOption("", `Global default (${globalLabel})`);
+				dd.addOptions(options)
+					.setValue(current)
+					.onChange((value) => {
+						this.draft.audioFormat = value || undefined;
+					});
+			});
 	}
 
 	/**

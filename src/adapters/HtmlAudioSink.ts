@@ -43,7 +43,13 @@ export class HtmlAudioSink implements AudioSink {
 			el.onended = () => finish(resolve);
 			el.onerror = () =>
 				finish(() =>
-					reject(new TtsError("unknown", "Could not play the generated audio")),
+					reject(
+						new TtsError(
+							"playback",
+							"Could not play the generated audio",
+							mediaErrorDetail(el.error),
+						),
+					),
 				);
 
 			signal.addEventListener("abort", onAbort, { once: true });
@@ -80,5 +86,24 @@ export class HtmlAudioSink implements AudioSink {
 		if (!this.objectUrl) return;
 		URL.revokeObjectURL(this.objectUrl);
 		this.objectUrl = null;
+	}
+}
+
+/** MediaError.message is often empty, so the numeric code needs its own words. */
+function mediaErrorDetail(error: MediaError | null): string | undefined {
+	if (!error) return undefined;
+	if (error.message) return error.message;
+
+	switch (error.code) {
+		case MediaError.MEDIA_ERR_ABORTED:
+			return "playback was aborted";
+		case MediaError.MEDIA_ERR_NETWORK:
+			return "a network error interrupted the download";
+		case MediaError.MEDIA_ERR_DECODE:
+			return "the audio data could not be decoded";
+		case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+			return "the audio format is not supported";
+		default:
+			return undefined;
 	}
 }

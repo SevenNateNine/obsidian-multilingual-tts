@@ -1,4 +1,5 @@
-import type { ProviderId, VoiceProfile } from "../settings/types";
+import type { VoiceProfile } from "../settings/types";
+import type { ProviderType } from "./providerTypes";
 
 export interface VoiceInfo {
 	/** Stable identifier stored in VoiceProfile.voiceId. */
@@ -40,8 +41,26 @@ export interface RenderedAudio extends OutputFormatInfo {
 	data: ArrayBuffer;
 }
 
+/**
+ * What the settings tab says about a provider's voice list.
+ *
+ * The provider writes the sentence because only it knows what makes its list
+ * stale: Azure caches per region and expires after a week, and the device list
+ * changes when a voice is installed. `displayName` is a provider-authored string
+ * for the same reason.
+ */
+export interface VoiceListStatus {
+	text: string;
+	/** True when the user must act, for example after a region change. */
+	warning: boolean;
+	/** Shown on hover, where `text` had to shorten something. */
+	tooltip?: string | undefined;
+}
+
 interface ProviderBase {
-	readonly id: ProviderId;
+	/** The `ProviderInstance.id` this provider was built for, not an engine name. */
+	readonly id: string;
+	readonly type: ProviderType;
 	readonly displayName: string;
 	/**
 	 * Largest text slice this provider handles reliably in one request.
@@ -52,6 +71,10 @@ interface ProviderBase {
 	/** False when required credentials are missing. The UI explains what is necessary. */
 	isConfigured(): boolean;
 	listVoices(): Promise<VoiceInfo[]>;
+	/** Ignore any cache and load the list again. Backs the Refresh buttons. */
+	refreshVoices(): Promise<VoiceInfo[]>;
+	/** Null when there is nothing worth saying about the list. */
+	voiceListStatus(): Promise<VoiceListStatus | null>;
 }
 
 /**
@@ -67,6 +90,11 @@ export interface RenderingProvider extends ProviderBase {
 	 * the user has paid for the synthesis.
 	 */
 	outputFormat(profile: VoiceProfile): OutputFormatInfo;
+	/**
+	 * The formats this provider can write, by `VoiceProfile.audioFormat` key.
+	 * Declared here so the profile editor offers them without naming an engine.
+	 */
+	audioFormatOptions(): Record<string, string>;
 }
 
 /**

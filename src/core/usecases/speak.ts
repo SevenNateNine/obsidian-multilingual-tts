@@ -33,9 +33,9 @@ export async function speakPrepared(
 	text: string,
 	profile: VoiceProfile,
 ): Promise<SpeakOutcome> {
-	const provider = deps.providers.get(profile.provider);
+	const provider = deps.providers.get(profile.providerId);
 	if (!provider) {
-		return { ok: false, reason: "unknown-provider", detail: profile.provider };
+		return { ok: false, reason: "unknown-provider", detail: profile.providerId };
 	}
 	if (!provider.isConfigured()) {
 		return { ok: false, reason: "not-configured", detail: provider.displayName };

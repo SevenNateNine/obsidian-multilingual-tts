@@ -3,13 +3,18 @@ import { speak, speakPrepared, type SpeakDeps } from "./speak";
 import { AudioPlayer } from "../audio/AudioPlayer";
 import { ProviderRegistry } from "../tts/registry";
 import { TtsError } from "../errors";
-import { DEFAULT_SETTINGS, createProfile } from "../settings/types";
+import {
+	DEFAULT_SETTINGS,
+	createProfile,
+	createProviderInstance,
+} from "../settings/types";
 import type { AudioClip, AudioSink } from "../ports";
 import type {
 	OutputFormatInfo,
 	RenderedAudio,
 	SpeakingProvider,
 	SynthesisRequest,
+	TtsProvider,
 	RenderingProvider,
 } from "../tts/types";
 
@@ -35,6 +40,7 @@ class ImmediateSink implements AudioSink {
 class FakeAzure implements RenderingProvider {
 	readonly kind = "rendering" as const;
 	readonly id = "azure" as const;
+	readonly type = "azure" as const;
 	readonly displayName = "Azure Speech";
 	readonly maxChunkChars = 100;
 	readonly calls: string[] = [];
@@ -48,6 +54,16 @@ class FakeAzure implements RenderingProvider {
 	async listVoices(): Promise<[]> {
 		return [];
 	}
+	async refreshVoices(): Promise<[]> {
+		return [];
+	}
+	async voiceListStatus(): Promise<null> {
+		return null;
+	}
+	audioFormatOptions(): Record<string, string> {
+		return { mp3: "MP3" };
+	}
+
 	outputFormat(): OutputFormatInfo {
 		return MP3;
 	}
@@ -62,6 +78,7 @@ class FakeAzure implements RenderingProvider {
 class FakeSystem implements SpeakingProvider {
 	readonly kind = "speaking" as const;
 	readonly id = "system" as const;
+	readonly type = "system" as const;
 	readonly displayName = "System voices";
 	readonly maxChunkChars = 100;
 	readonly calls: string[] = [];
@@ -72,6 +89,12 @@ class FakeSystem implements SpeakingProvider {
 	async listVoices(): Promise<[]> {
 		return [];
 	}
+	async refreshVoices(): Promise<[]> {
+		return [];
+	}
+	async voiceListStatus(): Promise<null> {
+		return null;
+	}
 	async speak(req: SynthesisRequest): Promise<void> {
 		this.calls.push(req.text);
 	}
@@ -80,18 +103,39 @@ class FakeSystem implements SpeakingProvider {
 	cancel(): void {}
 }
 
+/**
+ * A registry over ready-made fakes, one instance per fake, keyed by the id each
+ * one declares. Uses the real `createProviderInstance`, so a change to the
+ * instance shape shows up here rather than in a hand-built literal.
+ */
+function registryOf(providers: readonly TtsProvider[]): ProviderRegistry {
+	const byId = new Map(providers.map((p) => [p.id, p]));
+	const registry = new ProviderRegistry((instance) => {
+		const provider = byId.get(instance.id);
+		if (!provider) throw new Error(`no fake registered for ${instance.id}`);
+		return provider;
+	});
+
+	registry.sync(
+		providers.map((p) =>
+			createProviderInstance(p.type, { id: p.id, name: p.displayName }),
+		),
+	);
+	return registry;
+}
+
 function setup(providers = [new FakeAzure(), new FakeSystem()]) {
 	const sink = new ImmediateSink();
 	const deps: SpeakDeps = {
-		providers: new ProviderRegistry(providers),
+		providers: registryOf(providers),
 		player: new AudioPlayer(sink),
 		settings: structuredClone(DEFAULT_SETTINGS),
 	};
 	return { deps, sink };
 }
 
-const azureProfile = createProfile({ provider: "azure" as const, voiceId: "v" });
-const systemProfile = createProfile({ provider: "system" as const, voiceId: "v" });
+const azureProfile = createProfile({ providerId: "azure", voiceId: "v" });
+const systemProfile = createProfile({ providerId: "system", voiceId: "v" });
 
 describe("speak", () => {
 	it("prepares the text before it reaches the provider", async () => {

@@ -1,12 +1,36 @@
 import type { KeyStorage } from "./secret";
+import {
+	SYSTEM_PROVIDER_ID,
+	providerTypeInfo,
+	type ProviderType,
+} from "../tts/providerTypes";
 
 /**
- * Every speech engine the plugin knows. The union derives from this array, so a
- * new engine is one edit here and one in the composition root.
+ * One configured speech engine.
+ *
+ * The type is which engine it is. The instance is one account of that engine,
+ * so two Azure resources in different regions are two instances of one type.
+ *
+ * `id` is the only thing a profile stores. Names and credentials are free to
+ * change without breaking that reference.
  */
-export const PROVIDER_IDS = ["azure", "system"] as const;
-
-export type ProviderId = (typeof PROVIDER_IDS)[number];
+export interface ProviderInstance {
+	id: string;
+	/** Fixed at creation. Changing it would invalidate every stored credential. */
+	type: ProviderType;
+	name: string;
+	/**
+	 * Keyed by `ProviderField.key`. Every credential is a string, so the field
+	 * table in `tts/providerTypes.ts` stays the only description of the shape.
+	 *
+	 * A secret field holds plain text while the plugin runs, whatever the storage
+	 * mode is. It is empty when an encrypted value has not been unlocked yet.
+	 * Only the composition root converts between this and the form on disk.
+	 */
+	config: Record<string, string>;
+	/** How this instance's secret fields are written to data.json. See `secret.ts`. */
+	keyStorage: KeyStorage;
+}
 
 /**
  * A saved, named voice configuration.
@@ -18,7 +42,8 @@ export interface VoiceProfile {
 	id: string;
 	name: string;
 	description: string;
-	provider: ProviderId;
+	/** A `ProviderInstance.id`, not an engine name. */
+	providerId: string;
 	/** BCP-47, for example "fr-FR". */
 	locale: string;
 	/** Azure: the voice ShortName. System: the SpeechSynthesisVoice.voiceURI. */
@@ -49,20 +74,11 @@ export interface VoiceProfile {
 
 export interface PluginSettings {
 	schemaVersion: number;
+	/** Ordered. The system instance is always present and cannot be removed. */
+	providers: ProviderInstance[];
 	/** Ordered. Order is the tie-break priority for auto-detection. */
 	profiles: VoiceProfile[];
 	defaultProfileId: string | null;
-	azure: {
-		/**
-		 * Plain text while the plugin runs, whatever the storage mode is. It is
-		 * empty when an encrypted key has not been unlocked yet. Only the
-		 * composition root converts between this and the form on disk.
-		 */
-		key: string;
-		region: string;
-		/** How `key` is written to data.json. See `secret.ts`. */
-		keyStorage: KeyStorage;
-	};
 	autoDetect: {
 		enabled: boolean;
 		/** Below this many characters, do not guess. Use the default profile. */
@@ -71,6 +87,8 @@ export interface PluginSettings {
 	output: {
 		/** Vault-relative. Empty means the vault root. */
 		defaultFolder: string;
+		/** A profile with no format of its own writes this one. Empty means the provider decides. */
+		defaultFormat: string;
 		insertPlayerAtCursor: boolean;
 	};
 	reading: {
@@ -81,23 +99,31 @@ export interface PluginSettings {
 	textFilterRegex: string;
 }
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
+
+/** The device voices, which need no credentials and are always available. */
+export function systemProviderInstance(): ProviderInstance {
+	return {
+		id: SYSTEM_PROVIDER_ID,
+		type: "system",
+		name: providerTypeInfo("system").displayName,
+		config: {},
+		keyStorage: "obfuscated",
+	};
+}
 
 export const DEFAULT_SETTINGS: PluginSettings = {
 	schemaVersion: CURRENT_SCHEMA_VERSION,
+	providers: [systemProviderInstance()],
 	profiles: [],
 	defaultProfileId: null,
-	azure: {
-		key: "",
-		region: "",
-		keyStorage: "obfuscated",
-	},
 	autoDetect: {
 		enabled: false,
 		minChars: 30,
 	},
 	output: {
 		defaultFolder: "Audio",
+		defaultFormat: "",
 		insertPlayerAtCursor: false,
 	},
 	reading: {
@@ -121,7 +147,7 @@ export function createProfile(
 		id: newId(),
 		name: "New profile",
 		description: "",
-		provider: "system",
+		providerId: SYSTEM_PROVIDER_ID,
 		locale: "en-US",
 		voiceId: "",
 		rate: 1,
@@ -132,9 +158,81 @@ export function createProfile(
 	};
 }
 
+/** A new, empty instance of one engine. Its type is fixed from here on. */
+export function createProviderInstance(
+	type: ProviderType,
+	partial: Partial<Omit<ProviderInstance, "type">> = {},
+	newId: () => string = () => crypto.randomUUID(),
+): ProviderInstance {
+	return {
+		id: newId(),
+		type,
+		name: providerTypeInfo(type).displayName,
+		config: {},
+		keyStorage: "obfuscated",
+		...partial,
+	};
+}
+
+/**
+ * One config value, defaulted to empty.
+ *
+ * `noUncheckedIndexedAccess` types every lookup as possibly undefined, which is
+ * the honest type for data that came off disk. Every caller wants the same
+ * fallback, so it lives here rather than at each call site.
+ */
+export function configValue(config: Record<string, string>, key: string): string {
+	return config[key] ?? "";
+}
+
+export function findProviderInstance(
+	settings: PluginSettings,
+	id: string,
+): ProviderInstance | null {
+	return settings.providers.find((p) => p.id === id) ?? null;
+}
+
+/** The instance name to show, falling back to the engine name for a missing one. */
+export function providerLabel(settings: PluginSettings, id: string): string {
+	return findProviderInstance(settings, id)?.name ?? id;
+}
+
+/**
+ * A name not already taken, so two Azure resources are told apart in the list.
+ *
+ * Names are cosmetic and ids are what anything stores, so this is a courtesy at
+ * creation rather than a rule. Nothing stops the user renaming both to the same
+ * thing afterwards.
+ */
+export function uniqueProviderName(settings: PluginSettings, base: string): string {
+	const taken = new Set(settings.providers.map((p) => p.name));
+	if (!taken.has(base)) return base;
+
+	for (let suffix = 2; suffix <= taken.size + 1; suffix++) {
+		const candidate = `${base} ${suffix}`;
+		if (!taken.has(candidate)) return candidate;
+	}
+	return base;
+}
+
 function findProfile(settings: PluginSettings, id: string | null): VoiceProfile | null {
 	if (!id) return null;
 	return settings.profiles.find((p) => p.id === id) ?? null;
+}
+
+/**
+ * The audio format a profile writes: its own choice when set, otherwise the
+ * global default. Undefined leaves the choice to the provider, which is what
+ * an empty global default means.
+ *
+ * The sibling of `resolveOutputFolder` in `paths.ts`, and it applies at the
+ * same point: saving to a file. Playback sounds the same in every format.
+ */
+export function resolveAudioFormat(
+	profile: Pick<VoiceProfile, "audioFormat">,
+	settings: Pick<PluginSettings, "output">,
+): string | undefined {
+	return profile.audioFormat || settings.output.defaultFormat || undefined;
 }
 
 /**

@@ -11,7 +11,7 @@ import {
 import type { PluginSettings } from "./settings/types";
 
 const settings = (defaultFolder: string): Pick<PluginSettings, "output"> => ({
-	output: { defaultFolder, insertPlayerAtCursor: false },
+	output: { defaultFolder, defaultFormat: "", insertPlayerAtCursor: false },
 });
 
 const ctrl = (code: number) => String.fromCharCode(code);

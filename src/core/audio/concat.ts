@@ -28,7 +28,11 @@ export function concatenateAudio(
 	strategy: ConcatStrategy,
 ): ArrayBuffer {
 	if (!isNonEmpty(buffers)) {
-		throw new TtsError("unknown", "No audio was produced");
+		throw new TtsError(
+			"corrupt-audio",
+			"No audio was produced",
+			"no audio was produced",
+		);
 	}
 	if (buffers.length === 1) return buffers[0];
 
@@ -90,7 +94,11 @@ function concatRiff(buffers: NonEmpty<ArrayBuffer>): ArrayBuffer {
 	const parts = buffers.map((buffer) => {
 		const chunk = findRiffChunk(buffer, "data");
 		if (!chunk) {
-			throw new TtsError("unknown", "Generated WAV audio was not readable");
+			throw new TtsError(
+				"corrupt-audio",
+				"Generated WAV audio was not readable",
+				"the WAV data chunk was missing",
+			);
 		}
 		// Trust the buffer over a header that overruns it.
 		const end = Math.min(chunk.dataOffset + chunk.size, buffer.byteLength);
@@ -98,7 +106,13 @@ function concatRiff(buffers: NonEmpty<ArrayBuffer>): ArrayBuffer {
 	});
 
 	const first = findRiffChunk(buffers[0], "data");
-	if (!first) throw new TtsError("unknown", "Generated WAV audio was not readable");
+	if (!first) {
+		throw new TtsError(
+			"corrupt-audio",
+			"Generated WAV audio was not readable",
+			"the WAV data chunk was missing",
+		);
+	}
 
 	// Everything up to and including the first file's `data` header becomes the
 	// template, so the fmt chunk and any preceding metadata are preserved.

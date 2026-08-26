@@ -12,8 +12,9 @@ import type {
 	RenderingProvider,
 	SynthesisRequest,
 	VoiceInfo,
+	VoiceListStatus,
 } from "../../core/tts/types";
-import type { VoiceProfile } from "../../core/settings/types";
+import { configValue, type VoiceProfile } from "../../core/settings/types";
 import {
 	fetchVoiceCatalog,
 	isCatalogFresh,
@@ -22,9 +23,10 @@ import {
 	type CatalogStore,
 	type Fetcher,
 } from "./voiceCatalog";
-import { getAudioFormat } from "./formats";
+import { audioFormatOptions, getAudioFormat } from "./formats";
 import { buildSsml } from "./ssml";
 import { TtsError } from "../../core/errors";
+import { formatAbsoluteTime, formatRelativeTime } from "../../core/time";
 
 export interface AzureCredentials {
 	key: string;
@@ -34,6 +36,10 @@ export interface AzureCredentials {
 /**
  * Azure Speech.
  *
+ * One instance per configured resource, so two subscriptions in two regions
+ * each keep their own voice list. `id` is the provider instance the settings
+ * hold, not the name of the engine.
+ *
  * A `null` audio config makes the SDK render to an ArrayBuffer that we own.
  * The SDK then writes nothing to disk and plays nothing. As a result,
  * AudioPlayer controls playback with public DOM APIs, and the save path
@@ -41,7 +47,7 @@ export interface AzureCredentials {
  */
 export class AzureProvider implements RenderingProvider {
 	readonly kind = "rendering" as const;
-	readonly id = "azure" as const;
+	readonly type = "azure" as const;
 	readonly displayName = "Azure Speech";
 
 	/** Comfortably under the service's ten-minute-per-request audio cap. */
@@ -50,19 +56,31 @@ export class AzureProvider implements RenderingProvider {
 	private voices: VoiceInfo[] = [];
 	private inflight: Promise<VoiceInfo[]> | null = null;
 	private meta: CatalogCacheInfo | null = null;
+	/** The region `voices` was loaded for. See `discardStaleVoices`. */
+	private loadedRegion: string | null = null;
 
 	constructor(
-		private readonly getCredentials: () => AzureCredentials,
+		readonly id: string,
+		private readonly getConfig: () => Record<string, string>,
 		private readonly store: CatalogStore,
 		private readonly fetcher: Fetcher,
 	) {}
 
+	private credentials(): AzureCredentials {
+		const config = this.getConfig();
+		return {
+			key: configValue(config, "key"),
+			region: configValue(config, "region"),
+		};
+	}
+
 	isConfigured(): boolean {
-		const { key, region } = this.getCredentials();
-		return Boolean(key?.trim() && region?.trim());
+		const { key, region } = this.credentials();
+		return Boolean(key.trim() && region.trim());
 	}
 
 	async listVoices(): Promise<VoiceInfo[]> {
+		this.discardStaleVoices();
 		if (this.voices.length > 0) return this.voices;
 		if (this.inflight) return this.inflight;
 
@@ -75,9 +93,9 @@ export class AzureProvider implements RenderingProvider {
 	/** Ignore the cache and re-fetch. Backs the "Refresh voice list" button. */
 	async refreshVoices(): Promise<VoiceInfo[]> {
 		this.voices = [];
-		const { key, region } = this.getCredentials();
+		const { key, region } = this.credentials();
 		const voices = await fetchVoiceCatalog(region, key, this.fetcher);
-		this.voices = voices;
+		this.accept(voices, region);
 
 		const catalog = { fetchedAt: Date.now(), region, voices };
 		await this.store.write(catalog);
@@ -101,9 +119,51 @@ export class AzureProvider implements RenderingProvider {
 		return this.meta;
 	}
 
+	/**
+	 * The catalog is what makes per-voice style and role gating work, and it
+	 * expires after a week, so its age is worth surfacing at all times rather
+	 * than only after a refresh.
+	 */
+	async voiceListStatus(): Promise<VoiceListStatus> {
+		this.discardStaleVoices();
+		const { region } = this.credentials();
+		const info = await this.cacheInfo().catch(() => null);
+
+		if (!info || info.voiceCount === 0) {
+			return {
+				text: this.isConfigured()
+					? "No voice list cached yet. Press Refresh to load voices."
+					: "No voice list cached. Add a speech key and region.",
+				warning: false,
+			};
+		}
+
+		// isCatalogFresh rejects a catalog from another region, so a region change
+		// silently invalidates the cache. Say so instead of showing stale counts.
+		const current = region.trim();
+		if (current && info.region && info.region !== current) {
+			return {
+				text: `Cached for ${info.region}. The current region is ${current}. Press Refresh.`,
+				warning: true,
+			};
+		}
+
+		return {
+			text:
+				`${info.voiceCount} voices across ${info.localeCount} languages` +
+				` · updated ${formatRelativeTime(info.fetchedAt)}`,
+			warning: false,
+			tooltip: formatAbsoluteTime(info.fetchedAt),
+		};
+	}
+
 	/** Catalog entry for a voice id, or null when the catalog is not loaded. */
 	findVoice(voiceId: string): VoiceInfo | null {
 		return this.voices.find((v) => v.id === voiceId) ?? null;
+	}
+
+	audioFormatOptions(): Record<string, string> {
+		return audioFormatOptions();
 	}
 
 	outputFormat(profile: VoiceProfile): OutputFormatInfo {
@@ -112,8 +172,8 @@ export class AzureProvider implements RenderingProvider {
 	}
 
 	async render(req: SynthesisRequest, signal: AbortSignal): Promise<RenderedAudio> {
-		const { key, region } = this.getCredentials();
-		if (!key?.trim() || !region?.trim()) {
+		const { key, region } = this.credentials();
+		if (!key.trim() || !region.trim()) {
 			throw new TtsError(
 				"not-configured",
 				"Azure is not configured",
@@ -149,6 +209,27 @@ export class AzureProvider implements RenderingProvider {
 			synthesizer.close();
 			speechConfig.close();
 		}
+	}
+
+	/**
+	 * Forget a voice list that belongs to a region the user has since changed.
+	 *
+	 * Without this the editor keeps offering the old region's voices until
+	 * Obsidian restarts, because the in-memory list is only ever filled, never
+	 * cleared.
+	 */
+	private discardStaleVoices(): void {
+		const { region } = this.credentials();
+		if (this.loadedRegion === null || this.loadedRegion === region) return;
+
+		this.voices = [];
+		this.meta = null;
+		this.loadedRegion = null;
+	}
+
+	private accept(voices: VoiceInfo[], region: string): void {
+		this.voices = voices;
+		this.loadedRegion = region;
 	}
 
 	private speak(
@@ -187,7 +268,7 @@ export class AzureProvider implements RenderingProvider {
 	}
 
 	private async loadVoices(): Promise<VoiceInfo[]> {
-		const { region } = this.getCredentials();
+		const { region } = this.credentials();
 
 		const cached = await this.store.read().catch(() => null);
 		// Captured before the freshness check, whose type predicate narrows
@@ -196,7 +277,7 @@ export class AzureProvider implements RenderingProvider {
 		const staleMeta = cached ? summarizeCatalog(cached) : null;
 
 		if (isCatalogFresh(cached, region)) {
-			this.voices = cached.voices;
+			this.accept(cached.voices, region);
 			this.meta = summarizeCatalog(cached);
 			return this.voices;
 		}
@@ -209,7 +290,7 @@ export class AzureProvider implements RenderingProvider {
 					"Add an Azure speech key and region to load voices",
 				);
 			}
-			this.voices = staleVoices;
+			this.accept(staleVoices, region);
 			this.meta = staleMeta;
 			return this.voices;
 		}
@@ -219,7 +300,7 @@ export class AzureProvider implements RenderingProvider {
 		} catch (err) {
 			// A short network failure must not empty a voice list that we have.
 			if (staleVoices.length > 0) {
-				this.voices = staleVoices;
+				this.accept(staleVoices, region);
 				this.meta = staleMeta;
 				return this.voices;
 			}
@@ -240,7 +321,11 @@ export class AzureProvider implements RenderingProvider {
 /** Turn a cancelled result into a specific, actionable error. */
 function describeFailure(result: SpeechSynthesisResult): TtsError {
 	if (result.reason !== ResultReason.Canceled) {
-		return new TtsError("unknown", "Speech synthesis did not complete");
+		return new TtsError(
+			"unknown",
+			"Speech synthesis did not complete",
+			`result reason: ${ResultReason[result.reason] ?? String(result.reason)}`,
+		);
 	}
 
 	const details = CancellationDetails.fromResult(result);

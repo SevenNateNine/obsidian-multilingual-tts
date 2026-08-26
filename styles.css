@@ -31,11 +31,54 @@ input.t2ap-invalid {
 	color: var(--text-warning);
 }
 
-/* Voice list cache status */
-.t2ap-cache-status {
+/* Settings tabs */
+.t2ap-tab-bar {
+	border-bottom: 1px solid var(--background-modifier-border);
+	display: flex;
+	gap: var(--size-4-1);
+	margin-bottom: var(--size-4-4);
+}
+
+.t2ap-tab {
+	background: transparent;
+	border: none;
+	/* Sits on the bar's own rule, so the active tab appears to break through it. */
+	border-bottom: 2px solid transparent;
+	border-radius: 0;
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-medium);
+	margin-bottom: -1px;
+	padding: var(--size-4-2) var(--size-4-3);
+}
+
+.t2ap-tab:hover {
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-normal);
+}
+
+.t2ap-tab.is-active {
+	border-bottom-color: var(--interactive-accent);
+	color: var(--text-normal);
+}
+
+/* Provider rows and their voice list status */
+.t2ap-provider-row {
+	padding-bottom: var(--size-4-1);
+}
+
+.t2ap-provider-status:not(:empty) {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	margin-bottom: var(--size-4-3);
+}
+
+/* A profile whose provider was deleted cannot speak until it is repointed. */
+.t2ap-profile-orphan .setting-item-name {
+	color: var(--text-warning);
 }
 
 /* A button carrying both an icon and a text label */
@@ -50,7 +93,7 @@ input.t2ap-invalid {
 	width: 1em;
 }
 
-/* Plaintext key warning */
+/* Plaintext credential warning */
 .t2ap-key-warning {
 	background: var(--background-modifier-error-hover);
 	border-radius: var(--radius-s);
@@ -60,7 +103,7 @@ input.t2ap-invalid {
 	padding: var(--size-4-2) var(--size-4-3);
 }
 
-/* Profile editor */
+/* Profile and provider editors */
 
 /*
  * Obsidian core draws a rule above every `.setting-item`. In a settings tab
@@ -68,6 +111,37 @@ input.t2ap-invalid {
  * grouping is already carried by its headings, so the rules are just noise.
  * Vertical rhythm does the separating instead.
  */
+.t2ap-modal .setting-item {
+	border-top: none;
+	padding: var(--size-4-2) 0;
+}
+
+/* Headings keep a little more air above them to hold the groups apart. */
+.t2ap-modal .setting-item-heading {
+	margin-top: var(--size-4-4);
+	padding-bottom: var(--size-4-1);
+}
+
+/*
+ * Action row pinned to the bottom of the scrolling modal body, so Save stays
+ * reachable from anywhere in a long form. This border is deliberate: it marks
+ * where content scrolls underneath.
+ */
+.t2ap-modal .t2ap-modal-actions {
+	background-color: var(--modal-background, var(--background-primary));
+	border-top: 1px solid var(--background-modifier-border);
+	bottom: 0;
+	margin-top: var(--size-4-4);
+	padding: var(--size-4-3) 0 0;
+	position: sticky;
+	z-index: 1;
+}
+
+.t2ap-modal .t2ap-modal-actions .setting-item-control {
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+}
+
 .t2ap-profile-modal .setting-item {
 	border-top: none;
 	padding: var(--size-4-2) 0;
