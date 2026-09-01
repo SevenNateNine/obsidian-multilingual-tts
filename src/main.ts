@@ -10,12 +10,15 @@ import {
 import {
 	configValue,
 	findProviderInstance,
+	resolveAudioFormat,
 	resolveDefaultProfile,
 	type PluginSettings,
 	type ProviderInstance,
 	type VoiceProfile,
 } from "./core/settings/types";
 import { starterProfile } from "./core/usecases/starterProfile";
+import { planBatch, type OutputResolver, type PlanDeps } from "./core/batch/plan";
+import type { BatchPlan, BatchPreset } from "./core/batch/types";
 import { SettingsStore } from "./core/settings/SettingsStore";
 import { migrateSettings } from "./core/settings/migrations";
 import { SecretVault } from "./core/settings/SecretVault";
@@ -35,7 +38,7 @@ import {
 	type NameVars,
 } from "./core/text/nameTemplate";
 import { audioLink } from "./core/text/audioLink";
-import { userMessage } from "./core/errors";
+import { TtsError, userMessage } from "./core/errors";
 import { planRead } from "./core/usecases/planRead";
 import { speak, speakPrepared, type SpeakDeps } from "./core/usecases/speak";
 import { saveAudio, saveAudioPrepared, type SaveDeps } from "./core/usecases/saveAudio";
@@ -45,6 +48,7 @@ import { AzureProvider } from "./adapters/azure/AzureProvider";
 import { HtmlAudioSink } from "./adapters/HtmlAudioSink";
 import { francDetector } from "./adapters/francDetector";
 import { ObsidianAudioStore, fileAtPath } from "./adapters/obsidian/ObsidianAudioStore";
+import { ObsidianNoteIndex } from "./adapters/obsidian/ObsidianNoteIndex";
 import { CatalogCacheFile } from "./adapters/obsidian/CatalogCacheFile";
 import { obsidianFetcher } from "./adapters/obsidian/obsidianFetcher";
 import { getReadableText } from "./adapters/obsidian/editorText";
@@ -53,6 +57,8 @@ import { SettingsTab } from "./ui/SettingsTab";
 import { ProfileSuggestModal } from "./ui/ProfileSuggestModal";
 import { ConvertModal } from "./ui/ConvertModal";
 import { PassphraseModal } from "./ui/PassphraseModal";
+import { BatchPreviewModal } from "./ui/BatchPreviewModal";
+import { BatchPresetSuggestModal } from "./ui/BatchPresetSuggestModal";
 import { PropertyPromptModal } from "./ui/PropertyPromptModal";
 
 type MenuActionId = "read" | "save" | "link";
@@ -80,6 +86,7 @@ export default class MultilingualTtsPlugin extends Plugin {
 
 	private store!: SettingsStore;
 	private audioStore!: ObsidianAudioStore;
+	private noteIndex!: ObsidianNoteIndex;
 	/** Held concretely: the starter profile reads the platform default voice. */
 	private system!: SystemProvider;
 	private catalogCache!: CatalogCacheFile;
@@ -134,6 +141,12 @@ export default class MultilingualTtsPlugin extends Plugin {
 					new Notice(`Default profile: ${profile.name}`);
 				}, "Set the default voice profile…");
 			},
+		});
+
+		this.addCommand({
+			id: "preview-batch-audio",
+			name: "Preview batch audio…",
+			callback: () => this.pickPreset((preset) => this.openBatchPreview(preset)),
 		});
 
 		this.addCommand({
@@ -199,6 +212,7 @@ export default class MultilingualTtsPlugin extends Plugin {
 			this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
 
 		this.audioStore = new ObsidianAudioStore(this.app.vault);
+		this.noteIndex = new ObsidianNoteIndex(this.app.vault, this.app.metadataCache);
 		this.system = new SystemProvider();
 		this.catalogCache = new CatalogCacheFile(
 			this.app.vault.adapter,
@@ -684,6 +698,90 @@ export default class MultilingualTtsPlugin extends Plugin {
 			return outcome;
 		} finally {
 			if (this.renderAbort === controller) this.renderAbort = null;
+		}
+	}
+
+	/**
+	 * What a run of `preset` would do, without doing any of it.
+	 *
+	 * Public so a QuickAdd or Templater script reads the same numbers the
+	 * preview dialog shows. Nothing is synthesized and nothing is written.
+	 *
+	 * The queue comes from one snapshot of the metadata cache. Obsidian
+	 * reindexes for minutes after a large batch, so a second read part way
+	 * through a run would disagree with the first.
+	 */
+	previewBatch(preset: BatchPreset | string): BatchPlan {
+		return planBatch(
+			this.noteIndex.snapshot(),
+			this.batchPreset(preset),
+			this.planDeps(),
+		);
+	}
+
+	/** The preset with this id, or the one that was passed whole. */
+	private batchPreset(preset: BatchPreset | string): BatchPreset {
+		if (typeof preset !== "string") return preset;
+
+		const found = this.settings.batch.presets.find((p) => p.id === preset);
+		if (!found) throw new TtsError("invalid-request", "No such batch preset", preset);
+		return found;
+	}
+
+	private planDeps(): PlanDeps {
+		return {
+			settings: this.settings,
+			output: (profile) => this.outputFor(profile),
+			// Resolved against the note that holds the link, so a clip beside its
+			// own card is found the same way Obsidian finds it.
+			resolveLink: (linktext, from) =>
+				this.app.metadataCache.getFirstLinkpathDest(linktext, from)?.path ?? null,
+			exists: (path) => this.audioStore.exists(path),
+			formatDate: formatWithMoment,
+		};
+	}
+
+	/**
+	 * What a profile writes, refusing in the order `saveAudioPrepared` refuses,
+	 * so a preview and the run after it never disagree about what is possible.
+	 */
+	private outputFor(profile: VoiceProfile): ReturnType<OutputResolver> {
+		const provider = this.providers.get(profile.providerId);
+		if (!provider) return { ok: false, reason: "unknown-provider" };
+		if (provider.kind !== "rendering") return { ok: false, reason: "cannot-render" };
+		if (!provider.isConfigured()) return { ok: false, reason: "not-configured" };
+
+		const format = provider.outputFormat({
+			...profile,
+			audioFormat: resolveAudioFormat(profile, this.settings),
+		});
+		return { ok: true, extension: format.extension };
+	}
+
+	/** Open the preset picker, or give the reason it cannot open. */
+	private pickPreset(onChoose: (preset: BatchPreset) => void): void {
+		const { presets } = this.settings.batch;
+		const [only] = presets;
+
+		if (!only) {
+			new Notice("No batch presets yet. Add one in settings.");
+			return;
+		}
+		// One preset is not a choice, and a picker with one row is a delay.
+		if (presets.length === 1) {
+			onChoose(only);
+			return;
+		}
+		new BatchPresetSuggestModal(this.app, presets, onChoose).open();
+	}
+
+	/** Show what a run would do. The settings tab and the command share it. */
+	openBatchPreview(preset: BatchPreset): void {
+		try {
+			new BatchPreviewModal(this.app, this.previewBatch(preset)).open();
+		} catch (err) {
+			new Notice(userMessage(err));
+			console.error("[multilingual-tts] could not preview the batch", err);
 		}
 	}
 

@@ -14,6 +14,11 @@ import { uniqueVaultPath } from "../../core/paths";
 export class ObsidianAudioStore implements AudioStore {
 	constructor(private readonly vault: Vault) {}
 
+	/** A file, not a folder: a folder here makes `save` choose another name. */
+	exists(path: string): boolean {
+		return fileAtPath(this.vault, path) !== null;
+	}
+
 	/** Never overwrites: an existing name gains a numeric suffix. */
 	async save(
 		folder: string,

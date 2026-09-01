@@ -53,4 +53,32 @@ export interface AudioStore {
 		extension: string,
 		data: ArrayBuffer,
 	): Promise<SavedAudio>;
+	/**
+	 * True when a file already occupies this vault path.
+	 *
+	 * A batch asks before it synthesizes. A clip left by a run that stopped
+	 * before it wrote the link must be linked, not paid for a second time.
+	 */
+	exists(path: string): boolean;
+}
+
+/**
+ * One note, in the form the metadata cache already holds it.
+ *
+ * A batch takes its queue from a single snapshot of these. Obsidian reindexes
+ * for minutes after a large batch, so a run that read the cache again part way
+ * through would see its own half-written state and make some clips twice.
+ */
+export interface NoteRecord {
+	/** Vault-relative, including the extension. */
+	path: string;
+	/** The name without the extension, which is what `{{title}}` expands to. */
+	basename: string;
+	/** As Obsidian parsed it: a string, a number, a boolean, or a list of those. */
+	frontmatter: Record<string, unknown>;
+}
+
+/** Every note a batch can consider, read once per run. */
+export interface NoteIndex {
+	snapshot(): NoteRecord[];
 }

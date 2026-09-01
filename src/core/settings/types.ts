@@ -1,5 +1,6 @@
 import type { KeyStorage } from "./secret";
 import type { LinkStyle } from "../text/audioLink";
+import type { AudioTarget, BatchPreset } from "../batch/types";
 import {
 	SYSTEM_PROVIDER_ID,
 	providerTypeInfo,
@@ -108,12 +109,16 @@ export interface PluginSettings {
 	reading: {
 		readBeforeOrAfter: "off" | "before" | "after";
 	};
+	/** Named batch configurations. Ordered, and each one selects its own notes. */
+	batch: {
+		presets: BatchPreset[];
+	};
 	stripMarkdown: boolean;
 	/** Optional user regex. Each match becomes a space before synthesis. */
 	textFilterRegex: string;
 }
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 /** The device voices, which need no credentials and are always available. */
 export function systemProviderInstance(): ProviderInstance {
@@ -150,6 +155,9 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 	},
 	reading: {
 		readBeforeOrAfter: "off",
+	},
+	batch: {
+		presets: [],
 	},
 	stripMarkdown: true,
 	textFilterRegex: "",
@@ -192,6 +200,41 @@ export function createProviderInstance(
 		name: providerTypeInfo(type).displayName,
 		config: {},
 		keyStorage: "obfuscated",
+		...partial,
+	};
+}
+
+/**
+ * A new, empty batch preset.
+ *
+ * `newId` is injected the same way it is for a profile, so a test produces a
+ * stable identifier. `type` is the property most decks filter on, so it is the
+ * starting value rather than an empty field the user must guess at.
+ */
+export function createBatchPreset(
+	partial: Partial<BatchPreset> = {},
+	newId: () => string = () => crypto.randomUUID(),
+): BatchPreset {
+	return {
+		id: newId(),
+		name: "New batch",
+		filter: { property: "type", value: "" },
+		targets: [],
+		trackChanges: true,
+		...partial,
+	};
+}
+
+/** A new, empty target inside a preset. */
+export function createAudioTarget(
+	partial: Partial<AudioTarget> = {},
+	newId: () => string = () => crypto.randomUUID(),
+): AudioTarget {
+	return {
+		id: newId(),
+		textField: "",
+		audioField: "",
+		prefix: "",
 		...partial,
 	};
 }

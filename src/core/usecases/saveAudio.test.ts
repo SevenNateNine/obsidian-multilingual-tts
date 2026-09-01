@@ -101,6 +101,13 @@ class FakeStore implements AudioStore {
 		bytes: number;
 	}[] = [];
 
+	/** Paths this store is to report as already taken. */
+	readonly present = new Set<string>();
+
+	exists(path: string): boolean {
+		return this.present.has(path);
+	}
+
 	async save(
 		folder: string,
 		basename: string,

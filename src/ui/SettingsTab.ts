@@ -1,6 +1,8 @@
 import { App, Menu, Notice, PluginSettingTab, Setting } from "obsidian";
 import type MultilingualTtsPlugin from "../main";
 import {
+	createAudioTarget,
+	createBatchPreset,
 	createProfile,
 	createProviderInstance,
 	findProviderInstance,
@@ -10,6 +12,10 @@ import {
 } from "../core/settings/types";
 import { instantiableTypes, providerTypeInfo } from "../core/tts/providerTypes";
 import { ProfileEditorModal } from "./ProfileEditorModal";
+import { BatchPresetModal } from "./BatchPresetModal";
+import { describePreset } from "./BatchPresetSuggestModal";
+import { validateTargets } from "../core/batch/targets";
+import type { BatchPreset } from "../core/batch/types";
 import { ProviderEditorModal } from "./ProviderEditorModal";
 import { sanitizeFilename, validateFolderPath } from "../core/paths";
 import {
@@ -25,7 +31,7 @@ import { isDetectable, languageSubtag } from "../core/text/languages";
 import { setButtonLabel } from "../adapters/obsidian/buttonLabel";
 import { addDropdownTooltip } from "../adapters/obsidian/dropdown";
 
-type TabId = "general" | "providers";
+type TabId = "general" | "providers" | "batch";
 
 const LINK_STYLE_LABELS: Record<LinkStyle, string> = {
 	wikilink: "Wikilink — [[audio.mp3|word]]",
@@ -36,6 +42,7 @@ const LINK_STYLE_LABELS: Record<LinkStyle, string> = {
 const TABS: readonly { id: TabId; label: string }[] = [
 	{ id: "general", label: "General" },
 	{ id: "providers", label: "Providers" },
+	{ id: "batch", label: "Batch" },
 ];
 
 /** Why a refresh produced no new voice list. */
@@ -79,7 +86,8 @@ export class SettingsTab extends PluginSettingTab {
 
 		body.empty();
 		if (this.activeTab === "general") this.renderGeneral(body);
-		else this.renderProviders(body);
+		else if (this.activeTab === "providers") this.renderProviders(body);
+		else this.renderBatch(body);
 	}
 
 	private renderGeneral(container: HTMLElement): void {
@@ -286,6 +294,145 @@ export class SettingsTab extends PluginSettingTab {
 		}
 	}
 
+	/**
+	 * Batch presets: which cards, which properties, and the preview that has to
+	 * run before a provider is ever asked for anything.
+	 */
+	private renderBatch(container: HTMLElement): void {
+		new Setting(container)
+			.setName("Batch audio")
+			.setDesc(
+				"Give many cards audio in one pass. A preset says which notes to act " +
+					"on and which of their properties to speak.",
+			)
+			.setHeading()
+			.addButton((btn) =>
+				btn
+					.setButtonText("Add preset")
+					.setCta()
+					.onClick(() => this.openPresetEditor(createBatchPreset(), true)),
+			);
+
+		const { presets } = this.plugin.settings.batch;
+
+		if (presets.length === 0) {
+			container.createEl("p", {
+				cls: "setting-item-description",
+				text:
+					"No presets yet. Add one to give a whole deck audio without " +
+					"converting each card by hand.",
+			});
+			return;
+		}
+
+		for (const preset of presets) this.renderPresetRow(container, preset);
+	}
+
+	private renderPresetRow(container: HTMLElement, preset: BatchPreset): void {
+		const problems = validateTargets(preset.targets);
+		const setting = new Setting(container)
+			.setName(preset.name)
+			.setDesc(describePreset(preset));
+
+		setting.settingEl.addClass("t2ap-provider-row");
+		// A preset that would overwrite its own output cannot be previewed
+		// either, because the preview would report a count it will not keep to.
+		if (problems.length > 0) setting.settingEl.addClass("t2ap-profile-orphan");
+
+		setting.addButton((btn) => {
+			setButtonLabel(btn, "eye", "Preview");
+			btn.setTooltip("Count the cards and the characters, without making anything");
+			btn.setDisabled(problems.length > 0);
+			btn.onClick(() => this.plugin.openBatchPreview(preset));
+		});
+
+		setting.addExtraButton((btn) =>
+			btn
+				.setIcon("pencil")
+				.setTooltip("Edit")
+				.onClick(() => this.openPresetEditor(preset, false)),
+		);
+
+		setting.addExtraButton((btn) =>
+			btn
+				.setIcon("more-vertical")
+				.setTooltip("More")
+				.onClick(() => {
+					const rect = btn.extraSettingsEl.getBoundingClientRect();
+					this.openPresetMenu({ x: rect.left, y: rect.bottom }, preset);
+				}),
+		);
+
+		if (problems[0]) {
+			container
+				.createDiv({ cls: "t2ap-provider-status t2ap-detect-warning" })
+				.setText(problems[0]);
+		}
+	}
+
+	private openPresetMenu(
+		position: { x: number; y: number },
+		preset: BatchPreset,
+	): void {
+		const menu = new Menu();
+
+		menu.addItem((item) =>
+			item
+				.setTitle("Duplicate")
+				.setIcon("copy")
+				.onClick(() => void this.duplicatePreset(preset)),
+		);
+
+		menu.addSeparator();
+
+		menu.addItem((item) =>
+			item
+				.setTitle("Delete")
+				.setIcon("trash")
+				.onClick(() => void this.removePreset(preset)),
+		);
+
+		menu.showAtPosition(position);
+	}
+
+	private openPresetEditor(preset: BatchPreset, isNew: boolean): void {
+		new BatchPresetModal(this.app, this.plugin, preset, isNew, async (result) => {
+			const { presets } = this.plugin.settings.batch;
+			const index = presets.findIndex((p) => p.id === result.id);
+			if (index >= 0) presets[index] = result;
+			else presets.push(result);
+
+			await this.plugin.saveSettings();
+			this.renderBody();
+		}).open();
+	}
+
+	private async duplicatePreset(preset: BatchPreset): Promise<void> {
+		// Every id is dropped so the copy is a separate preset with separate
+		// targets. Sharing a target id would make one edit change both presets.
+		const { id: _discarded, ...rest } = preset;
+		const copy = createBatchPreset({
+			...rest,
+			name: `${preset.name} copy`,
+			targets: preset.targets.map(({ id: _dropped, ...target }) =>
+				createAudioTarget(target),
+			),
+		});
+
+		this.plugin.settings.batch.presets.push(copy);
+		await this.plugin.saveSettings();
+		this.renderBody();
+	}
+
+	private async removePreset(preset: BatchPreset): Promise<void> {
+		const { batch } = this.plugin.settings;
+		batch.presets = batch.presets.filter((p) => p.id !== preset.id);
+
+		await this.plugin.saveSettings();
+		this.renderBody();
+		new Notice(`Deleted "${preset.name}".`);
+	}
+
 	private renderProviders(container: HTMLElement): void {
 		new Setting(container)
 			.setName("Providers")
@@ -333,8 +480,6 @@ export class SettingsTab extends PluginSettingTab {
 			.setName(instance.name)
 			.setDesc(this.describeProvider(instance));
 
-		setting.settingEl.addClass("t2ap-provider-row");
-
 		setting.addButton((btn) => {
 			const label = (text: string) => setButtonLabel(btn, "refresh-cw", text);
 			label("Refresh");
@@ -371,8 +516,9 @@ export class SettingsTab extends PluginSettingTab {
 			);
 		}
 
-		// Starts empty and fills asynchronously, because renderBody is synchronous.
-		const status = container.createDiv({ cls: "t2ap-provider-status" });
+		// The status lives inside the row description. It starts empty and fills
+		// asynchronously, because renderBody is synchronous.
+		const status = setting.descEl.createDiv();
 		void this.renderProviderStatus(status, instance);
 	}
 

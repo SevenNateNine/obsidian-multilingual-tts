@@ -1,6 +1,8 @@
 import {
 	CURRENT_SCHEMA_VERSION,
 	DEFAULT_SETTINGS,
+	createAudioTarget,
+	createBatchPreset,
 	createProfile,
 	createProviderInstance,
 	systemProviderInstance,
@@ -17,6 +19,7 @@ import {
 } from "../tts/providerTypes";
 import { KEY_STORAGE_MODES, type KeyStorage } from "./secret";
 import { isLinkStyle } from "../text/audioLink";
+import type { AudioTarget, BatchPreset } from "../batch/types";
 
 const DEFAULT_KEY_STORAGE: KeyStorage = "obfuscated";
 
@@ -45,6 +48,7 @@ export function migrateSettings(raw: unknown): PluginSettings {
 		output: normalizeOutput(pick(data, "output")),
 		reading: { ...DEFAULT_SETTINGS.reading, ...pick(data, "reading") },
 		menu: normalizeMenu(pick(data, "menu")),
+		batch: normalizeBatch(pick(data, "batch")),
 		providers,
 		profiles: normalizeProfiles(data.profiles, providers),
 		schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -264,6 +268,69 @@ function toProviderId(
 	return SYSTEM_PROVIDER_ID;
 }
 
+/**
+ * The batch presets, each one treated as a hand edit.
+ *
+ * A preset without an id is dropped, because the settings tab and the public
+ * API both address a preset by id, so one without an id can never be run.
+ * Everything else is defaulted rather than discarded, and `validateTargets`
+ * reports what is still wrong where the user can correct it.
+ */
+function normalizeBatch(stored: Record<string, unknown>): PluginSettings["batch"] {
+	if (!Array.isArray(stored.presets)) return { presets: [] };
+
+	const presets: BatchPreset[] = [];
+	const seen = new Set<string>();
+
+	for (const entry of stored.presets) {
+		const preset = toPreset(entry);
+		// A duplicate id would shadow the earlier preset wherever it is looked up.
+		if (!preset || seen.has(preset.id)) continue;
+		seen.add(preset.id);
+		presets.push(preset);
+	}
+	return { presets };
+}
+
+function toPreset(entry: unknown): BatchPreset | null {
+	if (!isRecord(entry)) return null;
+
+	const id = nonEmptyString(entry.id);
+	if (!id) return null;
+
+	const filter = pick(entry, "filter");
+	return createBatchPreset({
+		id,
+		name: nonEmptyString(entry.name) ?? "Batch",
+		filter: {
+			property: stringOr(filter.property),
+			value: stringOr(filter.value),
+		},
+		targets: toTargets(entry.targets),
+		// Absent means on, which is what a preset written before this option
+		// existed gets. Change detection costs nothing until a field is edited.
+		trackChanges: entry.trackChanges !== false,
+	});
+}
+
+function toTargets(raw: unknown): AudioTarget[] {
+	if (!Array.isArray(raw)) return [];
+
+	return raw.filter(isRecord).map((stored) => {
+		const target = createAudioTarget({
+			textField: stringOr(stored.textField),
+			audioField: stringOr(stored.audioField),
+			prefix: stringOr(stored.prefix),
+			nameFrom: optionalString(stored.nameFrom),
+			profileId: optionalString(stored.profileId),
+			hashField: optionalString(stored.hashField),
+		});
+		// Generated rather than required: a target is addressed only inside its
+		// own preset, so a hand-written entry without an id still works.
+		return { ...target, id: nonEmptyString(stored.id) ?? target.id };
+	});
+}
+
 function toKeyStorage(value: unknown): KeyStorage {
 	return KEY_STORAGE_MODES.includes(value as KeyStorage)
 		? (value as KeyStorage)
@@ -272,6 +339,15 @@ function toKeyStorage(value: unknown): KeyStorage {
 
 function finiteOr(value: unknown, fallback: number): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function stringOr(value: unknown, fallback = ""): string {
+	return typeof value === "string" ? value : fallback;
+}
+
+/** Undefined rather than empty, so an absent field stays absent on disk. */
+function optionalString(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
 function nonEmptyString(value: unknown): string | null {

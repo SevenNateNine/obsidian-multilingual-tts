@@ -390,3 +390,118 @@ describe("migrateSettings", () => {
 		});
 	});
 });
+
+describe("the batch block", () => {
+	const preset = (partial: Record<string, unknown> = {}) => ({
+		id: "p1",
+		name: "Korean deck",
+		filter: { property: "type", value: "[[Flashcard]]" },
+		targets: [
+			{ id: "t1", textField: "korean", audioField: "korean_audio", prefix: "KR" },
+		],
+		...partial,
+	});
+
+	const presets = (raw: unknown) =>
+		migrateSettings({ batch: { presets: raw } }).batch.presets;
+
+	it("defaults to no presets for a vault written before schema 5", () => {
+		expect(migrateSettings({ schemaVersion: 4 }).batch).toEqual({ presets: [] });
+	});
+
+	it("keeps a well-formed preset whole", () => {
+		const [kept] = presets([preset()]);
+		expect(kept).toEqual({
+			id: "p1",
+			name: "Korean deck",
+			filter: { property: "type", value: "[[Flashcard]]" },
+			targets: [
+				{
+					id: "t1",
+					textField: "korean",
+					audioField: "korean_audio",
+					prefix: "KR",
+					nameFrom: undefined,
+					profileId: undefined,
+					hashField: undefined,
+				},
+			],
+			trackChanges: true,
+		});
+	});
+
+	it("drops a preset with no id, which nothing could ever run", () => {
+		expect(presets([preset({ id: "" })])).toEqual([]);
+		expect(presets([preset({ id: undefined })])).toEqual([]);
+	});
+
+	it("drops a duplicate id rather than shadowing the first preset", () => {
+		const kept = presets([preset(), preset({ name: "Second" })]);
+		expect(kept).toHaveLength(1);
+		expect(kept[0]?.name).toBe("Korean deck");
+	});
+
+	it("drops a preset that is not an object, and a presets list that is not an array", () => {
+		expect(presets(["nonsense", 3, null])).toEqual([]);
+		expect(presets("nonsense")).toEqual([]);
+		expect(migrateSettings({ batch: "nonsense" }).batch).toEqual({ presets: [] });
+	});
+
+	it("defaults a missing name and a missing filter", () => {
+		const [kept] = presets([{ id: "p1" }]);
+		expect(kept?.name).toBe("Batch");
+		expect(kept?.filter).toEqual({ property: "", value: "" });
+		expect(kept?.targets).toEqual([]);
+	});
+
+	it("reads change tracking as on unless it was turned off", () => {
+		expect(presets([preset()])[0]?.trackChanges).toBe(true);
+		expect(presets([preset({ trackChanges: false })])[0]?.trackChanges).toBe(false);
+		expect(presets([preset({ trackChanges: "yes" })])[0]?.trackChanges).toBe(true);
+	});
+
+	it("drops a target that is not an object, and a targets list that is not an array", () => {
+		expect(presets([preset({ targets: ["nonsense", 7] })])[0]?.targets).toEqual([]);
+		expect(presets([preset({ targets: "nonsense" })])[0]?.targets).toEqual([]);
+	});
+
+	it("gives a target with no id one of its own, rather than dropping it", () => {
+		const target = { textField: "korean", audioField: "korean_audio", prefix: "KR" };
+		const [kept] = presets([preset({ targets: [target] })]);
+		expect(kept?.targets).toHaveLength(1);
+		expect(kept?.targets[0]?.id).toBeTruthy();
+	});
+
+	it("defaults a target field that is not a string", () => {
+		const target = { id: "t1", textField: 7, audioField: null, prefix: {} };
+		const [kept] = presets([preset({ targets: [target] })]);
+		expect(kept?.targets[0]).toMatchObject({
+			textField: "",
+			audioField: "",
+			prefix: "",
+		});
+	});
+
+	it("leaves an empty optional field absent rather than empty", () => {
+		const target = { id: "t1", nameFrom: "  ", profileId: "", hashField: 3 };
+		const [kept] = presets([preset({ targets: [target] })]);
+		expect(kept?.targets[0]?.nameFrom).toBeUndefined();
+		expect(kept?.targets[0]?.profileId).toBeUndefined();
+		expect(kept?.targets[0]?.hashField).toBeUndefined();
+	});
+
+	it("carries the optional fields through when they are set", () => {
+		const target = {
+			id: "t1",
+			nameFrom: "hanja",
+			profileId: "prof-1",
+			hashField: "kh",
+		};
+		const [kept] = presets([preset({ targets: [target] })]);
+		expect(kept?.targets[0]).toMatchObject({
+			nameFrom: "hanja",
+			profileId: "prof-1",
+			hashField: "kh",
+		});
+	});
+});
