@@ -9,6 +9,7 @@ This is built for vaults that mix languages: language notes, translation work, r
 - **Language auto-detection** — the language of the selection decides the voice, with a manual override always available.
 - **Voice profiles** — named, described, reorderable configurations of language, voice, speed, pitch, volume, and (on Azure) speaking style and role. Set up "French narrator — slow, for articles" once and pick it by name, or let detection choose for you.
 - **Two speech engines** — your device's built-in voices (free, offline, no account) and Azure Speech (high quality, expressive styles).
+- **Several providers at once** — add as many Azure resources as you like, each with its own key, region, voice list and storage mode. A profile picks one by name, and you can refresh one voice list or all of them.
 - **Per-profile output folders** — the French profile can file its audio under `Audio/French/` while everything else uses the global default.
 - **Save to audio files** — writes into your vault (so it works on mobile) and can insert a playable embed at the cursor.
 - **Long notes** — text is split at sentence boundaries, so playback starts after the first chunk rather than the whole note, and files longer than one request are joined into a single file.
@@ -23,9 +24,19 @@ Not yet in the community plugin list. Install it one of these two ways.
 
 ## Setup
 
+Settings has two tabs. **General** holds the profiles and everything about reading and saving. **Providers** holds the speech engines and their credentials.
+
 1. Enable the plugin. A starter profile is created from your device's default voice, so **Read selection** works immediately.
-2. Optionally add an Azure Speech key and region in settings, then press **Refresh voice list**.
-3. Add profiles under **Voice profiles → Add profile**.
+2. Optionally open **Providers → Add provider**, choose Azure Speech, enter a key and region, then press **Refresh** on its row.
+3. Add profiles under **General → Voice profiles → Add profile**.
+
+## Providers
+
+A provider is one configured speech engine. **System voices** is always there and needs nothing. Every other provider is one account that you add yourself, so two Azure resources in two regions are two providers, each with its own voice list.
+
+Each row shows what its voice list holds and how old it is. **Refresh** reloads one provider. **Refresh all** reloads every provider that can be reloaded, and skips any that is locked or has no credentials yet.
+
+Deleting a provider leaves the profiles that used it alone rather than moving them to another engine. Those profiles are marked in the list and say so if you try to read with them, so adding the provider back restores them.
 
 ### Azure
 
@@ -33,7 +44,7 @@ Azure Speech has a free tier. Create a Speech resource in the Azure portal and c
 
 #### How the key is stored
 
-Obsidian keeps plugin settings in a plain `data.json`. That file travels with your vault, so a synced vault syncs the key too. **Settings → Key storage** controls what the file actually holds.
+Obsidian keeps plugin settings in a plain `data.json`. That file travels with your vault, so a synced vault syncs the key too. Each provider has its own **Key storage** setting, in its editor, controlling what the file actually holds for that provider.
 
 | Mode                        | What it does                                       | What it protects against                                                                    |
 | --------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -43,7 +54,7 @@ Obsidian keeps plugin settings in a plain `data.json`. That file travels with yo
 
 Obfuscated is encoding, not encryption. Anybody who wants the key can reverse it in a few seconds. It is there to stop an accidental leak, not an attacker. This is the same level of protection that [Remotely Save](https://github.com/remotely-save/remotely-save) applies to its own settings file.
 
-Passphrase mode is real encryption. You enter the passphrase once per session, the first time something needs Azure. The passphrase is never written to disk. If you forget it, nothing can recover the key, and you must paste it again from the Azure portal.
+Passphrase mode is real encryption. Each provider has its own passphrase, and you enter it once per session, the first time something needs that provider. The passphrase is never written to disk. If you forget it, nothing can recover the key, and you must paste it again from the Azure portal.
 
 None of the three modes protect against software that already runs on your machine.
 
@@ -89,6 +100,8 @@ npm run lint
 ```
 
 `src/` is split by dependency direction. `core/` holds the decisions and imports no framework, no speech SDK and no language model — a lint rule fails the build if it ever does. `adapters/` holds the implementations of those decisions (Obsidian, Azure, the Web Speech API, franc), and `ui/` holds the Obsidian screens. `main.ts` wires them together.
+
+Adding a speech engine is three edits: an entry in `core/tts/providerTypes.ts` describing its name and credential fields, a class in `adapters/` implementing `RenderingProvider` or `SpeakingProvider`, and one branch in the factory in `main.ts`. Nothing in `ui/` names an engine, so the settings screen and the profile editor pick it up on their own.
 
 Tests cover the logic that is easy to get quietly wrong: markdown stripping, XML escaping, SSML capability gating, text chunking, WAV concatenation, language mapping, path resolution, settings migration, key encoding and decoding, the chunk prefetch during playback, and every way a read or a save can be refused. They run without Obsidian — `vitest.config.ts` aliases the `obsidian` module to a stub, and the layer split means the playback and conversion flows are testable with fakes rather than a live vault.
 
