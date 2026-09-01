@@ -7,7 +7,8 @@ export interface ConvertModalOptions {
 	plugin: MultilingualTtsPlugin;
 	initialText: string;
 	profile: VoiceProfile;
-	defaultBasename: string;
+	/** Asked again per profile and per edit, because both change the name. */
+	defaultBasename: (profile: VoiceProfile, text: string) => string;
 	onSaved: (linkText: string) => void;
 }
 
@@ -15,13 +16,13 @@ export interface ConvertModalOptions {
  * The full conversion dialog: edit the text, choose a profile, name the file,
  * then play or save.
  *
- * Takes an options object, not a positional list. `initialText` and
- * `defaultBasename` are both strings. A call site that exchanges the two
- * still compiles, and then every file gets the note text as its name.
+ * Takes an options object, not a positional list. Two of the fields were both
+ * plain strings, so a call site that exchanged them still compiled, and then
+ * every file got the note text as its name.
  */
 export class ConvertModal extends Modal {
 	private readonly plugin: MultilingualTtsPlugin;
-	private readonly defaultBasename: string;
+	private readonly defaultBasename: (profile: VoiceProfile, text: string) => string;
 	private readonly onSaved: (linkText: string) => void;
 
 	private text: string;
@@ -93,7 +94,7 @@ export class ConvertModal extends Modal {
 				.setDesc(`Saved to ${folder || "the vault root"}.`)
 				.addText((text) =>
 					text
-						.setPlaceholder(this.defaultBasename)
+						.setPlaceholder(this.defaultBasename(this.profile, this.text))
 						.setValue(this.filename)
 						.onChange((value) => {
 							this.filename = value;
@@ -168,7 +169,7 @@ export class ConvertModal extends Modal {
 				const outcome = await this.plugin.saveAudio(
 					this.text,
 					this.profile,
-					this.filename.trim() || this.defaultBasename,
+					this.filename.trim() || this.defaultBasename(this.profile, this.text),
 					(progress) =>
 						this.setStatus(
 							progress.total > 1

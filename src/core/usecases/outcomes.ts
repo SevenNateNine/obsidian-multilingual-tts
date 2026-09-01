@@ -1,3 +1,5 @@
+import type { AudioClip } from "../ports";
+
 /**
  * What a use case reports back.
  *
@@ -21,4 +23,10 @@ export interface Refused {
 
 export type SpeakOutcome = { ok: true } | Refused;
 
-export type SaveOutcome = { ok: true; path: string } | Refused;
+/**
+ * A save also hands back what it rendered.
+ *
+ * Playing that buffer is how "read and save" stays one synthesis rather than
+ * two, which matters when the provider charges per character.
+ */
+export type SaveOutcome = { ok: true; path: string; clip: AudioClip } | Refused;

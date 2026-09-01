@@ -11,12 +11,27 @@ import {
 import { instantiableTypes, providerTypeInfo } from "../core/tts/providerTypes";
 import { ProfileEditorModal } from "./ProfileEditorModal";
 import { ProviderEditorModal } from "./ProviderEditorModal";
-import { validateFolderPath } from "../core/paths";
+import { sanitizeFilename, validateFolderPath } from "../core/paths";
+import {
+	expandNameTemplate,
+	nameTemplateError,
+	BUILTIN_NAME_TEMPLATE,
+} from "../core/text/nameTemplate";
+import { LINK_STYLES, type LinkStyle } from "../core/text/audioLink";
+import { nameTemplateHelp } from "./nameTemplateHelp";
+import { formatWithMoment } from "../adapters/obsidian/momentFormat";
 import { userMessage } from "../core/errors";
 import { isDetectable, languageSubtag } from "../core/text/languages";
 import { setButtonLabel } from "../adapters/obsidian/buttonLabel";
+import { addDropdownTooltip } from "../adapters/obsidian/dropdown";
 
 type TabId = "general" | "providers";
+
+const LINK_STYLE_LABELS: Record<LinkStyle, string> = {
+	wikilink: "Wikilink — [[audio.mp3|word]]",
+	markdown: "Markdown link — [word](audio.mp3)",
+	embed: "Player after the word — word ![[audio.mp3]]",
+};
 
 const TABS: readonly { id: TabId; label: string }[] = [
 	{ id: "general", label: "General" },
@@ -70,8 +85,69 @@ export class SettingsTab extends PluginSettingTab {
 	private renderGeneral(container: HTMLElement): void {
 		this.renderProfiles(container);
 		this.renderAutoDetect(container);
+		this.renderMenu(container);
 		this.renderOutput(container);
 		this.renderReading(container);
+	}
+
+	/**
+	 * Which of the three actions the right-click menu offers.
+	 *
+	 * Every action reads the selection. The two saving ones also write a file,
+	 * and the third replaces the words with a link to it. Turning all three off
+	 * leaves the commands and the ribbon icon working.
+	 */
+	private renderMenu(container: HTMLElement): void {
+		new Setting(container)
+			.setName("Context menu")
+			.setDesc("The items shown when you right-click a selection.")
+			.setHeading();
+
+		const { menu } = this.plugin.settings;
+		const items: readonly {
+			key: "read" | "save" | "link";
+			name: string;
+			desc: string;
+		}[] = [
+			{ key: "read", name: "Read selection", desc: "Play the selection." },
+			{
+				key: "save",
+				name: "Read and save audio",
+				desc: "Play it and write the audio into your vault.",
+			},
+			{
+				key: "link",
+				name: "Read, save and link audio",
+				desc: "The same, and replace the selection with a link to the audio.",
+			},
+		];
+
+		for (const item of items) {
+			new Setting(container)
+				.setName(item.name)
+				.setDesc(item.desc)
+				.addToggle((toggle) =>
+					toggle.setValue(menu[item.key]).onChange(async (value) => {
+						menu[item.key] = value;
+						await this.plugin.saveSettings();
+						this.renderBody();
+					}),
+				);
+		}
+
+		if (!menu.link) return;
+
+		new Setting(container)
+			.setName("Link style")
+			.setDesc("What replaces the selection after the audio is saved.")
+			.addDropdown((dd) => {
+				for (const style of LINK_STYLES) dd.addOption(style, LINK_STYLE_LABELS[style]);
+				dd.setValue(menu.linkStyle).onChange(async (value) => {
+					menu.linkStyle = value as LinkStyle;
+					await this.plugin.saveSettings();
+				});
+				addDropdownTooltip(dd);
+			});
 	}
 
 	private renderTabBar(container: HTMLElement): void {
@@ -514,6 +590,7 @@ export class SettingsTab extends PluginSettingTab {
 					text.inputEl.parentElement?.createDiv({ cls: "t2ap-field-error" }) ?? null;
 			});
 
+		this.renderNameTemplate(container);
 		this.renderDefaultFormat(container);
 
 		new Setting(container)
@@ -527,6 +604,84 @@ export class SettingsTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+	}
+
+	/**
+	 * The name every saved file gets, unless a profile overrides it.
+	 *
+	 * The preview matters more than the description here: a format token is
+	 * hard to read, and the answer is one line of example output away.
+	 */
+	private renderNameTemplate(container: HTMLElement): void {
+		let error: HTMLElement | null = null;
+		let preview: HTMLElement | null = null;
+
+		const show = (value: string) => {
+			const message = nameTemplateError(value);
+			error?.setText(message ?? "");
+			preview?.setText(`Example: ${this.previewName(value)}`);
+		};
+
+		new Setting(container)
+			.setName("File name template")
+			.setDesc(
+				nameTemplateHelp(
+					"How saved audio is named. Leave it empty to name each file after " +
+						"the words you read.",
+				),
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder(BUILTIN_NAME_TEMPLATE)
+					.setValue(this.plugin.settings.output.nameTemplate)
+					.onChange(async (value) => {
+						this.plugin.settings.output.nameTemplate = value;
+						show(value);
+						await this.plugin.saveSettings();
+					});
+				const parent = text.inputEl.parentElement;
+				error = parent?.createDiv({ cls: "t2ap-field-error" }) ?? null;
+				preview = parent?.createDiv({ cls: "t2ap-field-preview" }) ?? null;
+			});
+
+		show(this.plugin.settings.output.nameTemplate);
+
+		new Setting(container)
+			.setName("Ask for a missing property")
+			.setDesc(
+				"When a template asks for a note property that does not exist, ask for " +
+					"the value instead of using the name of the note. This applies to the " +
+					"right-click actions. The convert dialog already shows the name in a " +
+					"field you can edit.",
+			)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.output.askForMissingProperty)
+					.onChange(async (value) => {
+						this.plugin.settings.output.askForMissingProperty = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+	}
+
+	/** What `template` produces for the note that is open, without saving anything. */
+	private previewName(template: string): string {
+		const profile = this.plugin.settings.profiles[0];
+		const active = this.app.workspace.getActiveFile();
+
+		return sanitizeFilename(
+			expandNameTemplate([template.trim(), BUILTIN_NAME_TEMPLATE].filter(Boolean), {
+				title: active?.basename ?? "audio",
+				selection: "an example selection",
+				profile: profile?.name ?? "profile",
+				locale: profile?.locale ?? "en-US",
+				properties: active
+					? (this.app.metadataCache.getFileCache(active)?.frontmatter ?? {})
+					: {},
+				now: new Date(),
+				formatDate: formatWithMoment,
+			}),
+		);
 	}
 
 	/**
@@ -556,6 +711,8 @@ export class SettingsTab extends PluginSettingTab {
 						this.plugin.settings.output.defaultFormat = value;
 						await this.plugin.saveSettings();
 					});
+
+				addDropdownTooltip(dd);
 			});
 	}
 
@@ -740,6 +897,7 @@ export class SettingsTab extends PluginSettingTab {
 		const bits = [profile.locale, instance?.name ?? "provider missing"];
 		if (profile.style) bits.push(profile.style);
 		if (profile.outputFolder) bits.push(`→ ${profile.outputFolder}`);
+		if (profile.nameTemplate) bits.push(profile.nameTemplate);
 
 		const summary = bits.join(" · ");
 		return profile.description ? `${profile.description}\n${summary}` : summary;

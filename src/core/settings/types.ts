@@ -1,4 +1,5 @@
 import type { KeyStorage } from "./secret";
+import type { LinkStyle } from "../text/audioLink";
 import {
 	SYSTEM_PROVIDER_ID,
 	providerTypeInfo,
@@ -68,6 +69,8 @@ export interface VoiceProfile {
 
 	/** Vault-relative folder override. Empty/undefined means inherit the global default. */
 	outputFolder?: string | undefined;
+	/** File name template override. Empty/undefined means inherit the global one. */
+	nameTemplate?: string | undefined;
 	/** Whether language auto-detection is allowed to select this profile. */
 	useForAutoDetect: boolean;
 }
@@ -90,6 +93,17 @@ export interface PluginSettings {
 		/** A profile with no format of its own writes this one. Empty means the provider decides. */
 		defaultFormat: string;
 		insertPlayerAtCursor: boolean;
+		/** Obsidian template syntax. Empty means the built-in name. */
+		nameTemplate: string;
+		/** Ask for a property the note lacks, instead of taking the note name. */
+		askForMissingProperty: boolean;
+	};
+	/** Which actions the editor context menu offers, and how the third one links. */
+	menu: {
+		read: boolean;
+		save: boolean;
+		link: boolean;
+		linkStyle: LinkStyle;
 	};
 	reading: {
 		readBeforeOrAfter: "off" | "before" | "after";
@@ -99,7 +113,7 @@ export interface PluginSettings {
 	textFilterRegex: string;
 }
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 /** The device voices, which need no credentials and are always available. */
 export function systemProviderInstance(): ProviderInstance {
@@ -125,6 +139,14 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 		defaultFolder: "Audio",
 		defaultFormat: "",
 		insertPlayerAtCursor: false,
+		nameTemplate: "",
+		askForMissingProperty: false,
+	},
+	menu: {
+		read: true,
+		save: true,
+		link: true,
+		linkStyle: "wikilink",
 	},
 	reading: {
 		readBeforeOrAfter: "off",

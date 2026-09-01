@@ -312,6 +312,53 @@ describe("AudioPlayer", () => {
 		});
 	});
 
+	describe("playClip", () => {
+		const clip = { data: new Uint8Array([7]).buffer, mimeType: "audio/mpeg" };
+
+		it("plays a buffer that is already rendered", async () => {
+			const sink = new FakeSink();
+			const player = new AudioPlayer(sink);
+
+			const done = player.playClip(clip);
+			await tick();
+			expect(sink.clips).toEqual([7]);
+			expect(player.getState()).toBe("playing");
+
+			sink.finishClip();
+			await done;
+			expect(player.getState()).toBe("idle");
+		});
+
+		it("replaces playback that is already running", async () => {
+			const sink = new FakeSink();
+			const player = new AudioPlayer(sink);
+			const provider = new FakeRenderer();
+
+			const reading = player.play(provider, profile, LONG);
+			await tick();
+
+			const clipDone = player.playClip(clip);
+			await tick();
+			await reading;
+
+			sink.finishClip();
+			await clipDone;
+			expect(sink.clips[sink.clips.length - 1]).toBe(7);
+		});
+
+		it("treats a stop as a finish, not a failure", async () => {
+			const sink = new FakeSink();
+			const player = new AudioPlayer(sink);
+
+			const done = player.playClip(clip);
+			await tick();
+			player.stop();
+
+			await expect(done).resolves.toBeUndefined();
+			expect(player.getState()).toBe("idle");
+		});
+	});
+
 	it("releases the transport on destroy", async () => {
 		const sink = new FakeSink();
 		const player = new AudioPlayer(sink);

@@ -16,6 +16,16 @@
 	text-align: right;
 }
 
+/* Example output under a template field, where the error would otherwise go. */
+.t2ap-field-preview:not(:empty) {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	margin-top: var(--size-2-1);
+	max-width: 20em;
+	text-align: right;
+	word-break: break-word;
+}
+
 input.t2ap-invalid {
 	border-color: var(--text-error);
 }
@@ -65,11 +75,7 @@ input.t2ap-invalid {
 	color: var(--text-normal);
 }
 
-/* Provider rows and their voice list status */
-.t2ap-provider-row {
-	padding-bottom: var(--size-4-1);
-}
-
+/* Problem text under a batch preset row */
 .t2ap-provider-status:not(:empty) {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
@@ -93,6 +99,20 @@ input.t2ap-invalid {
 	width: 1em;
 }
 
+/* Help icon beside the name of a setting. The long text is in its tooltip. */
+.t2ap-help-icon {
+	color: var(--text-muted);
+	cursor: help;
+	display: inline-flex;
+	margin-inline-start: var(--size-4-1);
+	vertical-align: middle;
+}
+
+.t2ap-help-icon .svg-icon {
+	height: var(--icon-s);
+	width: var(--icon-s);
+}
+
 /* Plaintext credential warning */
 .t2ap-key-warning {
 	background: var(--background-modifier-error-hover);
@@ -105,52 +125,72 @@ input.t2ap-invalid {
 
 /* Profile and provider editors */
 
+.t2ap-modal {
+	--t2ap-control-width: 11rem;
+}
+
 /*
- * Obsidian core draws a rule above every `.setting-item`. In a settings tab
- * that separates unrelated options, but this modal is one short form whose
- * grouping is already carried by its headings, so the rules are just noise.
- * Vertical rhythm does the separating instead.
+ * Obsidian draws a rule, a background and a wide pad on every `.setting-item`
+ * in a modal. That selector holds four classes, so a plugin rule with fewer
+ * classes loses. Keep the `.modal` prefix on each override below.
+ * The rules are noise in one short form, so the groups separate instead.
  */
-.t2ap-modal .setting-item {
+.modal.t2ap-modal .setting-item:not(.setting-item-heading) {
+	background-color: transparent;
 	border-top: none;
 	padding: var(--size-4-2) 0;
 }
 
-/* Headings keep a little more air above them to hold the groups apart. */
+/* Obsidian indents a heading. That moves it away from the rows it labels. */
 .t2ap-modal .setting-item-heading {
-	margin-top: var(--size-4-4);
-	padding-bottom: var(--size-4-1);
+	padding-inline: 0;
 }
 
 /*
- * Action row pinned to the bottom of the scrolling modal body, so Save stays
- * reachable from anywhere in a long form. This border is deliberate: it marks
- * where content scrolls underneath.
+ * One rule at each group boundary, and none inside a group. `--border-width`
+ * is 0.5px on mobile, so the line stays one device pixel.
  */
-.t2ap-modal .t2ap-modal-actions {
-	background-color: var(--modal-background, var(--background-primary));
-	border-top: 1px solid var(--background-modifier-border);
-	bottom: 0;
+.t2ap-group + .t2ap-group {
+	border-top: var(--border-width) solid var(--background-modifier-border);
 	margin-top: var(--size-4-4);
-	padding: var(--size-4-3) 0 0;
-	position: sticky;
-	z-index: 1;
+	padding-top: var(--size-4-4);
 }
 
-.t2ap-modal .t2ap-modal-actions .setting-item-control {
-	flex-wrap: wrap;
-	gap: var(--size-4-2);
+/*
+ * One width for every dropdown, so the column does not look ragged. Obsidian
+ * measures each dropdown and fits it to its longest option, which is what
+ * makes the widths differ. A cut label stays readable in the tooltip.
+ * The `width` is not in the narrow layout that Obsidian applies under 400px,
+ * because that rule holds one more element name and wins.
+ */
+.t2ap-modal .setting-item-control .dropdown {
+	text-overflow: ellipsis;
+	width: var(--t2ap-control-width);
 }
 
-.t2ap-profile-modal .setting-item {
-	border-top: none;
-	padding: var(--size-4-2) 0;
+/*
+ * A slider row holds a number box and a track. Together they take one control
+ * width, so every row in the form ends at the same place. Obsidian fixes the
+ * track at 100px and lets the control column grow, so both need a rule.
+ */
+.t2ap-slider-row .setting-item-control {
+	flex: 0 1 var(--t2ap-control-width);
 }
 
-/* Headings keep a little more air above them to hold the groups apart. */
-.t2ap-profile-modal .setting-item-heading {
-	margin-top: var(--size-4-4);
-	padding-bottom: var(--size-4-1);
+.t2ap-slider-row .slider {
+	flex: 1 1 auto;
+	min-width: 0;
+	width: auto;
+}
+
+.t2ap-slider-row .t2ap-number {
+	flex: 0 0 4.5em;
+	text-align: end;
+}
+
+/* The box replaces the read-only value that Obsidian draws beside the track. */
+.t2ap-slider-row .slider-value {
+	display: none;
 }
 
 .t2ap-profile-modal .t2ap-textarea {
@@ -161,11 +201,12 @@ input.t2ap-invalid {
 /*
  * Action row pinned to the bottom of the scrolling modal body, so Save stays
  * reachable from anywhere in a long form. This border is deliberate: it marks
- * where content scrolls underneath.
+ * where content scrolls underneath. `.setting-item` is in the selector only to
+ * reach the weight of the Obsidian rule that paints each row transparent.
  */
-.t2ap-profile-modal .t2ap-modal-actions {
-	background-color: var(--modal-background, var(--background-primary));
-	border-top: 1px solid var(--background-modifier-border);
+.modal.t2ap-modal .setting-item.t2ap-modal-actions {
+	background-color: var(--modal-background);
+	border-top: var(--border-width) solid var(--background-modifier-border);
 	bottom: 0;
 	margin-top: var(--size-4-4);
 	padding: var(--size-4-3) 0 0;
@@ -173,7 +214,25 @@ input.t2ap-invalid {
 	z-index: 1;
 }
 
-.t2ap-profile-modal .t2ap-modal-actions .setting-item-control {
+/*
+ * The strip between the bar and the bottom edge of the modal.
+ *
+ * A sticky child stops at the content box of its scroll container, so the bar
+ * cannot reach the padding of `.modal` and rows scroll through that gap. The
+ * height matches that padding. Growing the bar itself does not work: Obsidian
+ * sets `padding-bottom: 0` on the last row of a modal, with one class more
+ * than any plugin rule that names the modal and the row.
+ */
+.modal.t2ap-modal .setting-item.t2ap-modal-actions::after {
+	background-color: var(--modal-background);
+	content: "";
+	height: var(--size-4-4);
+	inset-inline: 0;
+	position: absolute;
+	top: 100%;
+}
+
+.t2ap-modal .t2ap-modal-actions .setting-item-control {
 	flex-wrap: wrap;
 	gap: var(--size-4-2);
 }
@@ -229,4 +288,13 @@ input.t2ap-invalid {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+/* The number at the right of a preview row. It reports rather than acts, so it
+   is a disabled control styled back into plain text. */
+.t2ap-preview-value {
+	color: var(--text-normal);
+	font-variant-numeric: tabular-nums;
+	opacity: 1;
+	cursor: default;
 }

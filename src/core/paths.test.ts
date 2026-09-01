@@ -3,15 +3,25 @@ import {
 	joinVaultPath,
 	normalizeVaultPath,
 	resolveOutputFolder,
+	resolveNameTemplates,
 	sanitizeFilename,
-	timestampSuffix,
 	uniqueVaultPath,
 	validateFolderPath,
 } from "./paths";
 import type { PluginSettings } from "./settings/types";
+import { BUILTIN_NAME_TEMPLATE } from "./text/nameTemplate";
 
-const settings = (defaultFolder: string): Pick<PluginSettings, "output"> => ({
-	output: { defaultFolder, defaultFormat: "", insertPlayerAtCursor: false },
+const settings = (
+	defaultFolder: string,
+	nameTemplate = "",
+): Pick<PluginSettings, "output"> => ({
+	output: {
+		defaultFolder,
+		defaultFormat: "",
+		insertPlayerAtCursor: false,
+		nameTemplate,
+		askForMissingProperty: false,
+	},
 });
 
 const ctrl = (code: number) => String.fromCharCode(code);
@@ -122,8 +132,23 @@ describe("uniqueVaultPath", () => {
 	});
 });
 
-describe("timestampSuffix", () => {
-	it("is zero-padded and sortable", () => {
-		expect(timestampSuffix(new Date(2026, 7, 10, 9, 5, 3))).toBe("20260810090503");
+describe("resolveNameTemplates", () => {
+	it("puts the profile override first and the built-in last", () => {
+		expect(
+			resolveNameTemplates(
+				{ nameTemplate: "{{default}}_drill" },
+				settings("", "{{title}}"),
+			),
+		).toEqual(["{{default}}_drill", "{{title}}", BUILTIN_NAME_TEMPLATE]);
+	});
+
+	it("skips an empty or blank entry", () => {
+		expect(resolveNameTemplates({ nameTemplate: "   " }, settings(""))).toEqual([
+			BUILTIN_NAME_TEMPLATE,
+		]);
+		expect(resolveNameTemplates({}, settings("", "{{selection}}"))).toEqual([
+			"{{selection}}",
+			BUILTIN_NAME_TEMPLATE,
+		]);
 	});
 });

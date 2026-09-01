@@ -7,6 +7,8 @@ import { TtsError } from "../errors";
 export interface RenderedFile {
 	data: ArrayBuffer;
 	extension: string;
+	/** Carried so the finished buffer can also be played, without a second render. */
+	mimeType: string;
 }
 
 export interface RenderProgress {
@@ -57,5 +59,6 @@ export async function renderToFile(
 	return {
 		data: concatenateAudio(buffers, format.concat),
 		extension: format.extension,
+		mimeType: format.mimeType,
 	};
 }

@@ -30,6 +30,73 @@ const schema2 = {
 	],
 };
 
+describe("the context menu block", () => {
+	it("offers every action to a vault written before the option existed", () => {
+		expect(migrateSettings({ schemaVersion: 3 }).menu).toEqual({
+			read: true,
+			save: true,
+			link: true,
+			linkStyle: "wikilink",
+		});
+	});
+
+	it("keeps the stored choices", () => {
+		const result = migrateSettings({
+			menu: { read: false, save: true, link: false, linkStyle: "markdown" },
+		});
+
+		expect(result.menu.read).toBe(false);
+		expect(result.menu.linkStyle).toBe("markdown");
+	});
+
+	it("falls back on a link style this build does not know", () => {
+		const result = migrateSettings({ menu: { linkStyle: "hyperlink" } });
+		expect(result.menu.linkStyle).toBe("wikilink");
+	});
+
+	it("ignores a flag that is not a boolean", () => {
+		const result = migrateSettings({ menu: { save: "yes" } });
+		expect(result.menu.save).toBe(true);
+	});
+});
+
+describe("name templates", () => {
+	it("defaults the global template to the built-in name", () => {
+		expect(migrateSettings({}).output.nameTemplate).toBe("");
+	});
+
+	// A number here would throw on `.trim()` when the name is resolved.
+	it("drops a global template that is not text", () => {
+		expect(migrateSettings({ output: { nameTemplate: 7 } }).output.nameTemplate).toBe(
+			"",
+		);
+	});
+
+	it("does not ask about a missing property until the option is turned on", () => {
+		expect(migrateSettings({}).output.askForMissingProperty).toBe(false);
+		expect(
+			migrateSettings({ output: { askForMissingProperty: true } }).output
+				.askForMissingProperty,
+		).toBe(true);
+		expect(
+			migrateSettings({ output: { askForMissingProperty: "yes" } }).output
+				.askForMissingProperty,
+		).toBe(false);
+	});
+
+	it("keeps a profile template and drops one that is not text", () => {
+		const result = migrateSettings({
+			profiles: [
+				{ id: "a", nameTemplate: "{{default}}_drill" },
+				{ id: "b", nameTemplate: 7 },
+			],
+		});
+
+		expect(result.profiles[0]?.nameTemplate).toBe("{{default}}_drill");
+		expect(result.profiles[1]?.nameTemplate).toBeUndefined();
+	});
+});
+
 describe("migrateSettings", () => {
 	it("returns defaults for a fresh install", () => {
 		expect(migrateSettings(null)).toEqual(DEFAULT_SETTINGS);

@@ -4,7 +4,12 @@ import type { VoiceProfile } from "../core/settings/types";
 import type { VoiceInfo } from "../core/tts/types";
 import { languageSubtag } from "../core/text/languages";
 import { validateFolderPath } from "../core/paths";
+import { nameTemplateError, BUILTIN_NAME_TEMPLATE } from "../core/text/nameTemplate";
+import { nameTemplateHelp } from "./nameTemplateHelp";
 import { setButtonLabel } from "../adapters/obsidian/buttonLabel";
+import { addHelpIcon } from "../adapters/obsidian/helpIcon";
+import { addDropdownTooltip, setCompactLabels } from "../adapters/obsidian/dropdown";
+import { addNumberSlider } from "../adapters/obsidian/numberSlider";
 
 const DEFAULT_PREVIEW_TEXT = "This is how this profile sounds.";
 
@@ -19,6 +24,11 @@ const PREVIEW_TEXT: Record<string, string> = {
 	ko: "이 설정은 이렇게 들립니다.",
 	ru: "Вот как звучит эта конфигурация.",
 };
+
+const AUTO_DETECT_HELP =
+	"Auto-detection reads the selected text, finds its language, and picks a " +
+	"profile for that language. This profile joins that set. Detection needs " +
+	"profiles in two or more languages. A short selection uses the default profile.";
 
 /**
  * Create or edit one profile.
@@ -49,7 +59,7 @@ export class ProfileEditorModal extends Modal {
 	}
 
 	override async onOpen(): Promise<void> {
-		this.modalEl.addClass("t2ap-profile-modal");
+		this.modalEl.addClass("t2ap-modal", "t2ap-profile-modal");
 		this.titleEl.setText(this.isNew ? "New voice profile" : "Edit voice profile");
 		this.contentEl.createEl("p", {
 			cls: "t2ap-loading",
@@ -85,7 +95,14 @@ export class ProfileEditorModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 
-		new Setting(contentEl)
+		// One group for each decision. A rule between two groups replaces the
+		// rule that Obsidian draws above every row.
+		const basics = contentEl.createDiv({ cls: "t2ap-group" });
+		const voiceGroup = contentEl.createDiv({ cls: "t2ap-group" });
+		const delivery = contentEl.createDiv({ cls: "t2ap-group" });
+		const output = contentEl.createDiv({ cls: "t2ap-group" });
+
+		new Setting(basics)
 			.setName("Name")
 			.setDesc("Shown in the profile picker.")
 			.addText((text) =>
@@ -99,7 +116,7 @@ export class ProfileEditorModal extends Modal {
 
 		// The description is a sentence or two, so it gets a full-width line of
 		// its own rather than the narrow control column beside its label.
-		const description = new Setting(contentEl)
+		const description = new Setting(basics)
 			.setName("Description")
 			.setDesc("A note to yourself about when to use this profile.")
 			.addTextArea((area) => {
@@ -114,10 +131,9 @@ export class ProfileEditorModal extends Modal {
 			});
 		description.settingEl.addClass("t2ap-setting-stacked");
 
-		// Provider, voice and delivery are one decision — how this profile
-		// sounds — so they share a heading. Provider leads because it determines
-		// which voices exist.
-		new Setting(contentEl).setName("Voice").setHeading();
+		// Provider, language and voice are one decision: which voice speaks.
+		// Provider leads because it determines which voices exist.
+		new Setting(voiceGroup).setName("Voice").setHeading();
 
 		// Offer only providers that can run, so one missing its credentials never
 		// appears as a dead option. The profile's own provider is always included:
@@ -130,7 +146,7 @@ export class ProfileEditorModal extends Modal {
 		);
 		const missing = !instances.some((p) => p.id === this.draft.providerId);
 
-		new Setting(contentEl)
+		new Setting(voiceGroup)
 			.setName("Provider")
 			.setDesc(
 				instances.length > 1
@@ -151,59 +167,64 @@ export class ProfileEditorModal extends Modal {
 					await this.loadVoices();
 					this.render();
 				});
+
+				addDropdownTooltip(dd);
 			});
 
-		// Language, voice, style and role are rebuilt whenever the voice changes.
-		// The delivery sliders below stay put because they live outside this div.
-		this.dynamicEl = contentEl.createDiv();
+		// Language, voice, style and role are built again whenever the voice
+		// changes. The delivery sliders keep their values because they are in
+		// another group.
+		this.dynamicEl = voiceGroup.createDiv();
 		this.renderVoiceFields();
 
-		new Setting(contentEl)
-			.setName("Speed")
-			.setDesc("1 is the voice's natural pace.")
-			.addSlider((slider) =>
-				slider
-					.setLimits(0.5, 2, 0.05)
-					.setValue(this.draft.rate)
-					.setDynamicTooltip()
-					.onChange((value) => {
-						this.draft.rate = value;
-					}),
-			);
-
-		new Setting(contentEl)
-			.setName("Pitch")
-			.setDesc("Percent shift from the voice's natural pitch.")
-			.addSlider((slider) =>
-				slider
-					.setLimits(-50, 50, 1)
-					.setValue(this.draft.pitch)
-					.setDynamicTooltip()
-					.onChange((value) => {
-						this.draft.pitch = value;
-					}),
-			);
-
-		new Setting(contentEl).setName("Volume").addSlider((slider) =>
-			slider
-				.setLimits(0, 100, 1)
-				.setValue(this.draft.volume)
-				.setDynamicTooltip()
-				.onChange((value) => {
-					this.draft.volume = value;
-				}),
+		addNumberSlider(
+			new Setting(delivery).setName("Speed").setDesc("1 is the voice's natural pace."),
+			{
+				min: 0.5,
+				max: 2,
+				step: 0.05,
+				value: this.draft.rate,
+				onChange: (value) => {
+					this.draft.rate = value;
+				},
+			},
 		);
 
-		new Setting(contentEl).setName("Output").setHeading();
+		addNumberSlider(
+			new Setting(delivery)
+				.setName("Pitch")
+				.setDesc("Percent shift from the voice's natural pitch."),
+			{
+				min: -50,
+				max: 50,
+				step: 1,
+				value: this.draft.pitch,
+				onChange: (value) => {
+					this.draft.pitch = value;
+				},
+			},
+		);
+
+		addNumberSlider(new Setting(delivery).setName("Volume"), {
+			min: 0,
+			max: 100,
+			step: 1,
+			value: this.draft.volume,
+			onChange: (value) => {
+				this.draft.volume = value;
+			},
+		});
+
+		new Setting(output).setName("Output").setHeading();
 
 		// A speaking provider goes straight to the device and never produces a
 		// file, so a format has no meaning for it. Which formats exist is the
 		// provider's own answer, so no engine is named here.
 		const provider = this.plugin.providers.get(this.draft.providerId);
 		if (provider?.kind === "rendering") {
-			this.renderAudioFormat(contentEl, provider.audioFormatOptions());
+			this.renderAudioFormat(output, provider.audioFormatOptions());
 		} else {
-			contentEl.createEl("p", {
+			output.createEl("p", {
 				cls: "setting-item-description",
 				text: provider
 					? `${provider.displayName} plays through the device and cannot be saved to a file.`
@@ -213,7 +234,7 @@ export class ProfileEditorModal extends Modal {
 
 		const globalDefault = this.plugin.settings.output.defaultFolder || "vault root";
 		let folderError: HTMLElement | null = null;
-		new Setting(contentEl)
+		new Setting(output)
 			.setName("Save folder")
 			.setDesc(
 				`Where this profile saves audio. Leave empty to use the global default (${globalDefault}).`,
@@ -234,7 +255,33 @@ export class ProfileEditorModal extends Modal {
 					}) ?? null;
 			});
 
-		new Setting(contentEl)
+		const globalTemplate =
+			this.plugin.settings.output.nameTemplate.trim() || BUILTIN_NAME_TEMPLATE;
+		let templateError: HTMLElement | null = null;
+		new Setting(output)
+			.setName("File name template")
+			.setDesc(
+				nameTemplateHelp(
+					`How this profile names its files. Leave it empty to use the global one (${globalTemplate}), ` +
+						"or write {{default}}_drill to extend that instead of replacing it.",
+				),
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder(globalTemplate)
+					.setValue(this.draft.nameTemplate ?? "")
+					.onChange((value) => {
+						this.draft.nameTemplate = value.trim() ? value : undefined;
+						const message = nameTemplateError(value);
+						if (templateError) templateError.setText(message ?? "");
+					});
+				templateError =
+					text.inputEl.parentElement?.createDiv({
+						cls: "t2ap-field-error",
+					}) ?? null;
+			});
+
+		const autoDetect = new Setting(output)
 			.setName("Use for auto-detection")
 			.setDesc("Allow this profile to be chosen automatically by detected language.")
 			.addToggle((toggle) =>
@@ -242,6 +289,8 @@ export class ProfileEditorModal extends Modal {
 					this.draft.useForAutoDetect = value;
 				}),
 			);
+
+		addHelpIcon(autoDetect, AUTO_DETECT_HELP);
 
 		// Pinned to the bottom of the modal by CSS, so Save stays reachable
 		// without scrolling back down a long form.
@@ -294,6 +343,8 @@ export class ProfileEditorModal extends Modal {
 					.onChange((value) => {
 						this.draft.audioFormat = value || undefined;
 					});
+
+				addDropdownTooltip(dd);
 			});
 	}
 
@@ -338,6 +389,9 @@ export class ProfileEditorModal extends Modal {
 				this.draft.role = undefined;
 				this.renderVoiceFields();
 			});
+
+			// The code alone is enough to read the closed control.
+			setCompactLabels(dd, (locale) => locale);
 		});
 
 		const inLocale = this.voices.filter((v) => v.locale === currentLocale);
@@ -357,6 +411,8 @@ export class ProfileEditorModal extends Modal {
 				this.draft.role = undefined;
 				this.renderVoiceFields();
 			});
+
+			addDropdownTooltip(dd);
 		});
 
 		// Style and role exist only for the voices that advertise them. Emitting
@@ -375,6 +431,8 @@ export class ProfileEditorModal extends Modal {
 						this.draft.style = value || undefined;
 						this.renderVoiceFields();
 					});
+
+					addDropdownTooltip(dd);
 				});
 
 			if (this.draft.style) {
@@ -399,6 +457,8 @@ export class ProfileEditorModal extends Modal {
 				dd.setValue(this.draft.role ?? "").onChange((value) => {
 					this.draft.role = value || undefined;
 				});
+
+				addDropdownTooltip(dd);
 			});
 		}
 	}

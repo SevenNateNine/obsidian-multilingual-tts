@@ -1,6 +1,6 @@
 import type { RenderedAudio, RenderingProvider, TtsProvider } from "../tts/types";
 import type { VoiceProfile } from "../settings/types";
-import type { AudioSink } from "../ports";
+import type { AudioClip, AudioSink } from "../ports";
 import { chunkText } from "./chunker";
 import { TtsError, isCancellation } from "../errors";
 
@@ -63,6 +63,30 @@ export class AudioPlayer {
 			} else {
 				await this.playNative(provider, profile, chunks, controller.signal);
 			}
+		} catch (err) {
+			if (!isCancellation(err)) throw err;
+		} finally {
+			if (this.controller === controller) this.cleanup();
+		}
+	}
+
+	/**
+	 * Play audio that is already rendered.
+	 *
+	 * The save path holds the finished buffer, so playing it here is what keeps
+	 * "read and save" to one synthesis instead of two. The trade-off is that
+	 * playback starts after the whole text is rendered, not after the first
+	 * chunk as `play` does.
+	 */
+	async playClip(clip: AudioClip): Promise<void> {
+		this.stop();
+
+		const controller = new AbortController();
+		this.controller = controller;
+		this.setState("loading");
+
+		try {
+			await this.sink.play(clip, controller.signal, () => this.setState("playing"));
 		} catch (err) {
 			if (!isCancellation(err)) throw err;
 		} finally {

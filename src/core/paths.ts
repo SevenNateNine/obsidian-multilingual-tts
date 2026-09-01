@@ -1,4 +1,5 @@
 import type { PluginSettings, VoiceProfile } from "./settings/types";
+import { BUILTIN_NAME_TEMPLATE } from "./text/nameTemplate";
 
 /**
  * Vault-relative path handling.
@@ -81,6 +82,25 @@ export function resolveOutputFolder(
 	return normalizeVaultPath(override || fallback);
 }
 
+/**
+ * The templates that name a saved file, most specific first.
+ *
+ * `expandNameTemplate` resolves `{{default}}` against the next entry, so this
+ * order is what lets a profile extend the global name rather than repeat it.
+ * The built-in is always last, so the chain never runs out.
+ */
+export function resolveNameTemplates(
+	profile: Pick<VoiceProfile, "nameTemplate">,
+	settings: Pick<PluginSettings, "output">,
+): string[] {
+	const chain = [
+		profile.nameTemplate?.trim(),
+		settings.output.nameTemplate?.trim(),
+		BUILTIN_NAME_TEMPLATE,
+	];
+	return chain.filter((template): template is string => !!template);
+}
+
 /** Join a folder and file name into a vault path, tolerating an empty folder. */
 export function joinVaultPath(folder: string, filename: string): string {
 	const dir = normalizeVaultPath(folder);
@@ -116,17 +136,4 @@ export function uniqueVaultPath(
 		counter++;
 	}
 	return candidate;
-}
-
-/** `20260810130742`, used to make default file names unique and sortable. */
-export function timestampSuffix(date = new Date()): string {
-	const pad = (n: number) => String(n).padStart(2, "0");
-	return [
-		date.getFullYear(),
-		pad(date.getMonth() + 1),
-		pad(date.getDate()),
-		pad(date.getHours()),
-		pad(date.getMinutes()),
-		pad(date.getSeconds()),
-	].join("");
 }

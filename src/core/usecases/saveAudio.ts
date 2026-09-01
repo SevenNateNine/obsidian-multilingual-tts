@@ -18,19 +18,34 @@ export interface SaveDeps {
 }
 
 export interface SaveRequest {
-	rawText: string;
+	text: string;
 	profile: VoiceProfile;
 	basename: string;
 	signal: AbortSignal;
 }
 
+/** Prepare the text, then save it. */
+export async function saveAudio(
+	deps: SaveDeps,
+	req: SaveRequest,
+	onProgress?: (progress: RenderProgress) => void,
+): Promise<SaveOutcome> {
+	const text = prepareForSpeech(deps.settings, req.text);
+	if (!text) return { ok: false, reason: "empty-text" };
+	return saveAudioPrepared(deps, { ...req, text }, onProgress);
+}
+
 /**
- * Render text to one audio file in the vault.
+ * Render text that is already prepared to one audio file in the vault.
+ *
+ * Separate from `saveAudio` for the same reason `speakPrepared` is separate
+ * from `speak`: the context menu prepares once, detects the language on that
+ * text, and must not strip it a second time.
  *
  * Every refusal happens before the first request, so an impossible combination
  * costs nothing rather than failing after the synthesis has been paid for.
  */
-export async function saveAudio(
+export async function saveAudioPrepared(
 	deps: SaveDeps,
 	req: SaveRequest,
 	onProgress?: (progress: RenderProgress) => void,
@@ -46,8 +61,7 @@ export async function saveAudio(
 		return { ok: false, reason: "not-configured", detail: provider.displayName };
 	}
 
-	const text = prepareForSpeech(deps.settings, req.rawText);
-	if (!text) return { ok: false, reason: "empty-text" };
+	if (!req.text) return { ok: false, reason: "empty-text" };
 
 	// The profile carries a format only when it overrides the global one, so
 	// the choice is resolved here rather than in each provider.
@@ -60,7 +74,7 @@ export async function saveAudio(
 		const rendered = await renderToFile(
 			provider,
 			profile,
-			text,
+			req.text,
 			req.signal,
 			onProgress,
 		);
@@ -70,7 +84,11 @@ export async function saveAudio(
 			rendered.extension,
 			rendered.data,
 		);
-		return { ok: true, path: saved.path };
+		return {
+			ok: true,
+			path: saved.path,
+			clip: { data: rendered.data, mimeType: rendered.mimeType },
+		};
 	} catch (err) {
 		if (isCancellation(err)) return { ok: false, reason: "cancelled" };
 		return { ok: false, reason: "failed", error: err };

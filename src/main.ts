@@ -1,4 +1,12 @@
-import { Editor, MarkdownView, Notice, Plugin, TFile } from "obsidian";
+import {
+	Editor,
+	MarkdownView,
+	Menu,
+	Notice,
+	Plugin,
+	TFile,
+	type EditorSelection,
+} from "obsidian";
 import {
 	configValue,
 	findProviderInstance,
@@ -15,12 +23,22 @@ import { ProviderRegistry } from "./core/tts/registry";
 import { secretFields } from "./core/tts/providerTypes";
 import { AudioPlayer } from "./core/audio/AudioPlayer";
 import type { RenderProgress } from "./core/audio/renderToFile";
-import { describeSelection, shouldAnnounce } from "./core/text/detectLanguage";
-import { timestampSuffix } from "./core/paths";
+import {
+	describeSelection,
+	shouldAnnounce,
+	type ProfileSelection,
+} from "./core/text/detectLanguage";
+import { resolveNameTemplates } from "./core/paths";
+import {
+	expandNameTemplate,
+	missingProperties,
+	type NameVars,
+} from "./core/text/nameTemplate";
+import { audioLink } from "./core/text/audioLink";
 import { userMessage } from "./core/errors";
 import { planRead } from "./core/usecases/planRead";
 import { speak, speakPrepared, type SpeakDeps } from "./core/usecases/speak";
-import { saveAudio, type SaveDeps } from "./core/usecases/saveAudio";
+import { saveAudio, saveAudioPrepared, type SaveDeps } from "./core/usecases/saveAudio";
 import type { Refused, SaveOutcome, SpeakOutcome } from "./core/usecases/outcomes";
 import { SystemProvider } from "./adapters/system/SystemProvider";
 import { AzureProvider } from "./adapters/azure/AzureProvider";
@@ -30,10 +48,24 @@ import { ObsidianAudioStore, fileAtPath } from "./adapters/obsidian/ObsidianAudi
 import { CatalogCacheFile } from "./adapters/obsidian/CatalogCacheFile";
 import { obsidianFetcher } from "./adapters/obsidian/obsidianFetcher";
 import { getReadableText } from "./adapters/obsidian/editorText";
+import { formatWithMoment } from "./adapters/obsidian/momentFormat";
 import { SettingsTab } from "./ui/SettingsTab";
 import { ProfileSuggestModal } from "./ui/ProfileSuggestModal";
 import { ConvertModal } from "./ui/ConvertModal";
 import { PassphraseModal } from "./ui/PassphraseModal";
+import { PropertyPromptModal } from "./ui/PropertyPromptModal";
+
+type MenuActionId = "read" | "save" | "link";
+
+/** One row per context menu item, in the order they appear. */
+const MENU_ACTIONS: readonly { id: MenuActionId; title: string; icon: string }[] = [
+	{ id: "read", title: "Read selection", icon: "volume-2" },
+	{ id: "save", title: "Read and save audio", icon: "download" },
+	{ id: "link", title: "Read, save and link audio", icon: "link" },
+];
+
+/** Keeps the items together in one group, apart from Obsidian's own entries. */
+const MENU_SECTION = "multilingual-tts";
 
 /**
  * Composition root and Obsidian adapter.
@@ -60,6 +92,12 @@ export default class MultilingualTtsPlugin extends Plugin {
 
 	private statusBar: HTMLElement | null = null;
 	private renderAbort: AbortController | null = null;
+	/**
+	 * Profile id and detected language of the last announced detection, so a
+	 * repeat pick stays quiet and a change to a different profile or a
+	 * different undetected language is still announced.
+	 */
+	private lastAnnouncement: string | null = null;
 
 	override async onload(): Promise<void> {
 		await this.loadSettings();
@@ -134,15 +172,9 @@ export default class MultilingualTtsPlugin extends Plugin {
 		});
 
 		this.registerEvent(
-			this.app.workspace.on("editor-menu", (menu, editor) => {
-				if (!editor.getSelection().trim()) return;
-				menu.addItem((item) =>
-					item
-						.setTitle("Read selection")
-						.setIcon("volume-2")
-						.onClick(() => this.readFromEditor(editor)),
-				);
-			}),
+			this.app.workspace.on("editor-menu", (menu, editor) =>
+				this.addMenuItems(menu, editor),
+			),
 		);
 
 		this.addSettingTab(new SettingsTab(this.app, this));
@@ -390,7 +422,35 @@ export default class MultilingualTtsPlugin extends Plugin {
 		return raw;
 	}
 
+	/** The enabled actions, in their own group. Nothing is offered without a selection. */
+	private addMenuItems(menu: Menu, editor: Editor): void {
+		if (!editor.getSelection().trim()) return;
+
+		for (const action of MENU_ACTIONS) {
+			if (!this.settings.menu[action.id]) continue;
+			menu.addItem((item) =>
+				item
+					.setTitle(action.title)
+					.setIcon(action.icon)
+					.setSection(MENU_SECTION)
+					.onClick(() => void this.runAction(editor, action.id)),
+			);
+		}
+	}
+
 	private readFromEditor(editor: Editor): void {
+		void this.runAction(editor, "read");
+	}
+
+	/**
+	 * Read the selection, and for the two saving actions write it to a file too.
+	 *
+	 * The range is captured before the first await: synthesis takes seconds, and
+	 * the link must replace the words that were read rather than wherever the
+	 * cursor has moved to since.
+	 */
+	private async runAction(editor: Editor, action: MenuActionId): Promise<void> {
+		const range = editor.listSelections()[0];
 		const raw = this.readableText(editor);
 		if (!raw) return;
 
@@ -404,11 +464,68 @@ export default class MultilingualTtsPlugin extends Plugin {
 			return;
 		}
 
-		if (shouldAnnounce(plan.selection)) {
-			new Notice(describeSelection(plan.selection));
+		this.announceDetection(plan.selection);
+		const { profile } = plan.selection;
+
+		if (action === "read") {
+			await this.readPrepared(plan.text, profile);
+			return;
 		}
 
-		void this.readPrepared(plan.text, plan.selection.profile);
+		const basename = await this.basenameAsking(profile, raw);
+		if (basename === null) return;
+
+		// One synthesis, not two: the rendered buffer is played rather than
+		// asking the provider for the same audio a second time.
+		const outcome = await this.runSave(saveAudioPrepared, {
+			text: plan.text,
+			profile,
+			basename,
+		});
+		if (!outcome.ok) return;
+
+		new Notice(`Saved ${outcome.path}`);
+		// Not awaited: the link belongs in the note now, not when playback ends.
+		void this.player.playClip(outcome.clip).catch((err: unknown) => {
+			new Notice(userMessage(err));
+			console.error("[multilingual-tts] could not play the saved audio", err);
+		});
+		if (action === "link" && range) this.linkSelection(editor, range, outcome.path);
+	}
+
+	/** Say which voice was chosen, once per change of profile or language. */
+	private announceDetection(selection: ProfileSelection): void {
+		if (!shouldAnnounce(selection)) return;
+
+		const signature = `${selection.profile.id}:${selection.detected ?? ""}`;
+		if (signature === this.lastAnnouncement) return;
+
+		new Notice(describeSelection(selection));
+		this.lastAnnouncement = signature;
+	}
+
+	/**
+	 * Replace the words that were read with a link to their audio.
+	 *
+	 * A selection made backwards has its head before its anchor, so the two are
+	 * put in order before the range is read or written.
+	 */
+	private linkSelection(editor: Editor, range: EditorSelection, path: string): void {
+		const file = this.fileAt(path);
+		if (!file) return;
+
+		const forward = editor.posToOffset(range.anchor) <= editor.posToOffset(range.head);
+		const from = forward ? range.anchor : range.head;
+		const to = forward ? range.head : range.anchor;
+
+		// Resolved against the note that receives the link, so the link is the
+		// shortest form that works from that note.
+		const sourcePath = this.app.workspace.getActiveFile()?.path ?? "";
+		const markup = audioLink(this.settings.menu.linkStyle, editor.getRange(from, to), {
+			linktext: this.app.metadataCache.fileToLinktext(file, sourcePath),
+			path,
+		});
+		editor.replaceRange(markup, from, to);
 	}
 
 	private async readPrepared(text: string, profile: VoiceProfile): Promise<void> {
@@ -427,7 +544,7 @@ export default class MultilingualTtsPlugin extends Plugin {
 			plugin: this,
 			initialText: editor.getSelection(),
 			profile,
-			defaultBasename: this.defaultBasename(),
+			defaultBasename: (chosen, text) => this.basenameFor(chosen, text),
 			onSaved: (linkText) => this.insertAudioEmbed(editor, linkText),
 		}).open();
 	}
@@ -442,9 +559,74 @@ export default class MultilingualTtsPlugin extends Plugin {
 		editor.replaceSelection(`![[${linkText}]]`);
 	}
 
-	private defaultBasename(): string {
-		const active = this.app.workspace.getActiveFile()?.basename ?? "audio";
-		return `${active}_${timestampSuffix()}`;
+	/** The file name a save produces, from the profile's template chain. */
+	private basenameFor(profile: VoiceProfile, selection: string): string {
+		return expandNameTemplate(
+			resolveNameTemplates(profile, this.settings),
+			this.nameVars(profile, selection),
+		);
+	}
+
+	/**
+	 * The same name, first asking for any property the note does not supply.
+	 *
+	 * Null when the user closes that dialog, which cancels the save before any
+	 * synthesis is paid for. The convert dialog uses `basenameFor` instead: it
+	 * shows the name in an editable field, so it is already the prompt.
+	 */
+	private async basenameAsking(
+		profile: VoiceProfile,
+		selection: string,
+	): Promise<string | null> {
+		const chain = resolveNameTemplates(profile, this.settings);
+		const vars = this.nameVars(profile, selection);
+
+		if (!this.settings.output.askForMissingProperty) {
+			return expandNameTemplate(chain, vars);
+		}
+
+		const missing = missingProperties(chain, vars);
+		if (missing.length === 0) return expandNameTemplate(chain, vars);
+
+		const answers = await this.askForProperties(missing, vars.title);
+		if (!answers) return null;
+
+		return expandNameTemplate(chain, {
+			...vars,
+			properties: { ...vars.properties, ...answers },
+		});
+	}
+
+	/** Null when the user closed the dialog rather than naming the file. */
+	private askForProperties(
+		names: string[],
+		fallback: string,
+	): Promise<Record<string, string> | null> {
+		return new Promise((resolve) => {
+			new PropertyPromptModal(this.app, {
+				names,
+				fallback,
+				onSubmit: (values) => resolve(values),
+				onCancel: () => resolve(null),
+			}).open();
+		});
+	}
+
+	/** Everything a name template can refer to, for the note that is open. */
+	private nameVars(profile: VoiceProfile, selection: string): NameVars {
+		const active = this.app.workspace.getActiveFile();
+
+		return {
+			title: active?.basename ?? "audio",
+			selection,
+			profile: profile.name,
+			locale: profile.locale,
+			properties: active
+				? (this.app.metadataCache.getFileCache(active)?.frontmatter ?? {})
+				: {},
+			now: new Date(),
+			formatDate: formatWithMoment,
+		};
 	}
 
 	private speakDeps(): SpeakDeps {
@@ -471,17 +653,31 @@ export default class MultilingualTtsPlugin extends Plugin {
 		basename: string,
 		onProgress?: (progress: RenderProgress) => void,
 	): Promise<SaveOutcome> {
+		return this.runSave(saveAudio, { text: rawText, profile, basename }, onProgress);
+	}
+
+	/**
+	 * Run one of the two save use cases, cancelling any save already in flight.
+	 *
+	 * Which one is the caller's choice: the context menu has prepared its text
+	 * already, and the convert dialog has not.
+	 */
+	private async runSave(
+		save: typeof saveAudio,
+		req: { text: string; profile: VoiceProfile; basename: string },
+		onProgress?: (progress: RenderProgress) => void,
+	): Promise<SaveOutcome> {
 		// A closed passphrase dialog is a cancellation, and reports no message.
-		if (!(await this.unlocked(profile))) return { ok: false, reason: "cancelled" };
+		if (!(await this.unlocked(req.profile))) return { ok: false, reason: "cancelled" };
 
 		this.renderAbort?.abort();
 		const controller = new AbortController();
 		this.renderAbort = controller;
 
 		try {
-			const outcome = await saveAudio(
+			const outcome = await save(
 				this.saveDeps(),
-				{ rawText, profile, basename, signal: controller.signal },
+				{ ...req, signal: controller.signal },
 				onProgress,
 			);
 			this.announce(outcome, "convert");

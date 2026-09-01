@@ -16,6 +16,7 @@ import {
 	type ProviderType,
 } from "../tts/providerTypes";
 import { KEY_STORAGE_MODES, type KeyStorage } from "./secret";
+import { isLinkStyle } from "../text/audioLink";
 
 const DEFAULT_KEY_STORAGE: KeyStorage = "obfuscated";
 
@@ -41,8 +42,9 @@ export function migrateSettings(raw: unknown): PluginSettings {
 		...DEFAULT_SETTINGS,
 		...data,
 		autoDetect: { ...DEFAULT_SETTINGS.autoDetect, ...pick(data, "autoDetect") },
-		output: { ...DEFAULT_SETTINGS.output, ...pick(data, "output") },
+		output: normalizeOutput(pick(data, "output")),
 		reading: { ...DEFAULT_SETTINGS.reading, ...pick(data, "reading") },
+		menu: normalizeMenu(pick(data, "menu")),
 		providers,
 		profiles: normalizeProfiles(data.profiles, providers),
 		schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -57,6 +59,47 @@ export function migrateSettings(raw: unknown): PluginSettings {
 	}
 
 	return settings;
+}
+
+/**
+ * The output block, with the name template checked.
+ *
+ * A template that is not a string reaches `resolveNameTemplates`, where it
+ * would throw on `.trim()`. Everything else in the block is merged as it was.
+ */
+function normalizeOutput(stored: Record<string, unknown>): PluginSettings["output"] {
+	return {
+		...DEFAULT_SETTINGS.output,
+		...stored,
+		nameTemplate:
+			typeof stored.nameTemplate === "string"
+				? stored.nameTemplate
+				: DEFAULT_SETTINGS.output.nameTemplate,
+		askForMissingProperty:
+			typeof stored.askForMissingProperty === "boolean"
+				? stored.askForMissingProperty
+				: DEFAULT_SETTINGS.output.askForMissingProperty,
+	};
+}
+
+/**
+ * Which context menu items exist, and how the linking one writes its link.
+ *
+ * Absent means every item, which is what a vault written before this option
+ * existed gets. A link style this build does not know falls back to the
+ * default rather than leaving the dropdown on nothing.
+ */
+function normalizeMenu(stored: Record<string, unknown>): PluginSettings["menu"] {
+	const defaults = DEFAULT_SETTINGS.menu;
+	const flag = (value: unknown, fallback: boolean) =>
+		typeof value === "boolean" ? value : fallback;
+
+	return {
+		read: flag(stored.read, defaults.read),
+		save: flag(stored.save, defaults.save),
+		link: flag(stored.link, defaults.link),
+		linkStyle: isLinkStyle(stored.linkStyle) ? stored.linkStyle : defaults.linkStyle,
+	};
 }
 
 /**
@@ -190,6 +233,8 @@ function normalizeProfiles(
 			volume: finiteOr(stored.volume, defaults.volume),
 			styleDegree:
 				stored.styleDegree === undefined ? undefined : finiteOr(stored.styleDegree, 1),
+			nameTemplate:
+				typeof stored.nameTemplate === "string" ? stored.nameTemplate : undefined,
 			useForAutoDetect: stored.useForAutoDetect !== false,
 		};
 	});

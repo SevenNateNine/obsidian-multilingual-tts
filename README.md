@@ -11,6 +11,8 @@ This is built for vaults that mix languages: language notes, translation work, r
 - **Two speech engines** — your device's built-in voices (free, offline, no account) and Azure Speech (high quality, expressive styles).
 - **Several providers at once** — add as many Azure resources as you like, each with its own key, region, voice list and storage mode. A profile picks one by name, and you can refresh one voice list or all of them.
 - **Per-profile output folders** — the French profile can file its audio under `Audio/French/` while everything else uses the global default.
+- **Right-click a word** — read it, or save the audio, or save it and turn the word into a link to that audio. You choose which of the three the menu offers.
+- **Template file names** — audio is named after the words you read, and you can rename it with the same variables as the Obsidian Templates plugin, globally or per profile.
 - **Save to audio files** — writes into your vault (so it works on mobile) and can insert a playable embed at the cursor.
 - **Long notes** — text is split at sentence boundaries, so playback starts after the first chunk rather than the whole note, and files longer than one request are joined into a single file.
 
@@ -71,6 +73,32 @@ None of the three modes protect against software that already runs on your machi
 
 With nothing selected, **Read selection** can read everything before or after the cursor — see **Reading → With no selection, read**.
 
+## Context menu
+
+Right-click a selection and the plugin offers three actions, grouped together:
+
+| Item                      | What it does                                                             |
+| ------------------------- | ------------------------------------------------------------------------ |
+| Read selection            | Plays it                                                                 |
+| Read and save audio       | Plays it and writes the audio into your vault                            |
+| Read, save and link audio | The same, and replaces the selected words with a link to the saved audio |
+
+Turn each item on or off under **Settings → General → Context menu**. All three are on to start with.
+
+**Link style** decides what replaces the words:
+
+| Style                 | Result                     |
+| --------------------- | -------------------------- |
+| Wikilink (default)    | `[[Audio/안녕.mp3\|안녕]]` |
+| Markdown link         | `[안녕](Audio/안녕.mp3)`   |
+| Player after the word | `안녕 ![[Audio/안녕.mp3]]` |
+
+A wikilink is the default because Obsidian rewrites it when the audio file is moved or renamed. A word containing `[`, `]` or `|` cannot be wikilink text, so it gets a markdown link instead.
+
+The two saving actions render the audio once and play that file, rather than speaking the text and then paying for the same synthesis a second time. The cost is that playback starts after the whole selection is rendered. For a word this is not noticeable. For a long paragraph, plain **Read selection** starts sooner, because it plays the first chunk while it renders the next.
+
+A profile on the device voices cannot write a file. Those two actions report that and save nothing.
+
 ## Auto-detection
 
 Detection compares the selected text only against the languages your own profiles cover, which is far more reliable on a short selection than open-world language identification.
@@ -84,6 +112,77 @@ Profiles can opt out individually with **Use for auto-detection**. When two prof
 Saved audio goes to the **Default save folder**. A profile can override this with its own folder — leave a profile's folder empty to inherit the default. Missing folders are created automatically, and an existing file is never overwritten: a numeric suffix is added instead.
 
 Paths are relative to the vault root. Absolute paths are rejected, because writing outside the vault is what makes saving desktop-only.
+
+## File names
+
+By default each file is named after the words you read, so reading "hey" writes `hey.mp3`. Reading the same words again does not overwrite it: the second file becomes `hey-1.mp3`.
+
+**Settings → General → Output → File name template** changes that. It is written in the [template variables](https://obsidian.md/help/plugins/templates#Template+variables) of the Obsidian Templates plugin, so a format string you already use elsewhere behaves the same here.
+
+| Variable                      | Expands to                                           |
+| ----------------------------- | ---------------------------------------------------- |
+| `{{title}}`                   | The name of the note you are reading from            |
+| `{{date}}`, `{{date:FORMAT}}` | The date, in Moment.js tokens. Default `YYYY-MM-DD`  |
+| `{{time}}`, `{{time:FORMAT}}` | The time. Default `HH-mm-ss`                         |
+| `{{selection}}`               | The words being read, up to 40 characters            |
+| `{{property:name}}`           | A property of the note, or its name if there is none |
+| `{{profile}}`, `{{locale}}`   | The name and language of the voice profile           |
+| `{{default}}`                 | The name this template extends — see below           |
+
+`{{time}}` defaults to `HH-mm-ss` rather than Obsidian's `HH:mm`, because a colon cannot appear in a file name. A colon in a format you type is removed for the same reason.
+
+A profile can set its own template under **Edit profile → Output → File name template**, and an empty one inherits the global template. `{{default}}` stands for the template one level up, so you can extend a name instead of repeating it:
+
+| Profile template           | Result                     |
+| -------------------------- | -------------------------- |
+| `{{default}}_drill`        | Appends to the global name |
+| `KR_{{default}}`           | Prepends to it             |
+| `{{selection}}_{{locale}}` | Replaces it completely     |
+
+Illegal characters are removed from the finished name, and an existing file is never overwritten: a numeric suffix is added instead.
+
+### Naming files after a note property
+
+`{{property:name}}` reads a property from the frontmatter of the note you are reading. This is the useful one for a vocabulary vault, where the note already records the word, the lesson, or the unit.
+
+Take a note with this frontmatter:
+
+```yaml
+---
+word: annyeong
+lesson: 4
+tags:
+  - greeting
+  - polite
+---
+```
+
+| Template                                | File name             |
+| --------------------------------------- | --------------------- |
+| `{{property:word}}`                     | `annyeong.mp3`        |
+| `KR-{{property:word}}`                  | `KR-annyeong.mp3`     |
+| `{{property:word}}-{{property:lesson}}` | `annyeong-4.mp3`      |
+| `{{property:tags}}`                     | `greeting-polite.mp3` |
+
+Three rules make this predictable:
+
+- **A list becomes dash-separated.** `tags` above gives `greeting-polite`. Only the top level of a list is read, so a list inside a list adds nothing.
+- **A missing property falls back to the note name.** If that note had no `word` property, `KR-{{property:word}}` would write `KR-Korean vocabulary.mp3`, taking the name of the note itself. A property that exists but is empty falls back the same way, so you never get a name with a hole in it. Turn on **Ask for a missing property** to be asked instead — see below.
+- **Everything outside the braces is written as it stands.** That is how you prepend characters and separate parts with dashes: `KR-{{property:word}}-{{date:YYYYMMDD}}` writes `KR-annyeong-20260818.mp3`.
+
+Set this globally under **Settings → General → Output → File name template**, where the field shows an example built from the note you have open, or per profile so that only your Korean voice names files this way.
+
+### Being asked for a missing property
+
+Falling back to the note name is quiet, which is right when it happens rarely and wrong when you meant to fill the property in. **Settings → General → Output → Ask for a missing property** changes that: a dialog opens naming each property the note does not have, with a field for each one.
+
+- Type a value and the name uses it. Nothing is written back to the note — this names the audio only.
+- Leave a field empty and that property falls back to the note name, exactly as it does with the option off.
+- Close the dialog and nothing is saved. The dialog opens before any audio is rendered, so cancelling costs nothing.
+
+The dialog only appears when a template actually asks for a property the note lacks. A template with no `{{property:...}}` in it never opens one.
+
+This applies to the two saving actions in the right-click menu. **Convert text to audio…** does not use it, because that dialog already shows the file name in a field you can edit.
 
 ## Development
 

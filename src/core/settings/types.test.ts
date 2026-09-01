@@ -6,6 +6,8 @@ const settings = (defaultFormat: string): Pick<PluginSettings, "output"> => ({
 		defaultFolder: "Audio",
 		defaultFormat,
 		insertPlayerAtCursor: false,
+		nameTemplate: "",
+		askForMissingProperty: false,
 	},
 });
 

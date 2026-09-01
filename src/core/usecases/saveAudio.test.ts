@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { saveAudio, type SaveDeps } from "./saveAudio";
+import { saveAudio, saveAudioPrepared, type SaveDeps } from "./saveAudio";
 import { ProviderRegistry } from "../tts/registry";
 import { TtsError } from "../errors";
 import {
@@ -145,7 +145,7 @@ function setup(providers = [new FakeAzure(), new FakeSystem()]) {
 }
 
 const request = (overrides: Partial<Parameters<typeof saveAudio>[1]> = {}) => ({
-	rawText: "Some text to convert.",
+	text: "Some text to convert.",
 	profile: createProfile({ providerId: "azure", voiceId: "v" }),
 	basename: "note",
 	signal: new AbortController().signal,
@@ -157,7 +157,12 @@ describe("saveAudio", () => {
 		const { deps, store } = setup();
 		const outcome = await saveAudio(deps, request());
 
-		expect(outcome).toEqual({ ok: true, path: "Audio/note.mp3" });
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) return;
+		expect(outcome.path).toBe("Audio/note.mp3");
+		// The buffer comes back so a caller can play it without a second render.
+		expect(outcome.clip.mimeType).toBe("audio/mpeg");
+		expect(outcome.clip.data.byteLength).toBe(3);
 		expect(store.saves).toEqual([
 			{ folder: "Audio", basename: "note", extension: "mp3", bytes: 3 },
 		]);
@@ -219,7 +224,7 @@ describe("saveAudio", () => {
 		it("when nothing survives text preparation", async () => {
 			const azure = new FakeAzure();
 			const { deps, store } = setup([azure, new FakeSystem()]);
-			const outcome = await saveAudio(deps, request({ rawText: "   " }));
+			const outcome = await saveAudio(deps, request({ text: "   " }));
 
 			expect(outcome).toEqual({ ok: false, reason: "empty-text" });
 			expect(azure.calls).toEqual([]);
@@ -233,7 +238,7 @@ describe("saveAudio", () => {
 			azure.maxChunkChars = 5;
 			const { deps, store } = setup([azure, new FakeSystem()]);
 
-			const outcome = await saveAudio(deps, request({ rawText: "One. Two. Three." }));
+			const outcome = await saveAudio(deps, request({ text: "One. Two. Three." }));
 
 			expect(outcome.ok).toBe(false);
 			expect(azure.calls).toEqual([]);
@@ -272,5 +277,27 @@ describe("saveAudio", () => {
 
 		await saveAudio(deps, request(), (p) => seen.push(p.done));
 		expect(seen).toEqual([0, 1]);
+	});
+});
+
+describe("saveAudioPrepared", () => {
+	it("does not strip the text a second time", async () => {
+		const azure = new FakeAzure();
+		const { deps } = setup([azure, new FakeSystem()]);
+		deps.settings.stripMarkdown = true;
+
+		// An asterisk survives only because preparation is skipped. Through
+		// `saveAudio` the same text would come out as "bold".
+		await saveAudioPrepared(deps, request({ text: "**bold**" }));
+		expect(azure.calls).toEqual(["**bold**"]);
+	});
+
+	it("still refuses text that is empty", async () => {
+		const azure = new FakeAzure();
+		const { deps } = setup([azure, new FakeSystem()]);
+
+		const outcome = await saveAudioPrepared(deps, request({ text: "" }));
+		expect(outcome).toEqual({ ok: false, reason: "empty-text" });
+		expect(azure.calls).toEqual([]);
 	});
 });
