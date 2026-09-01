@@ -29,9 +29,16 @@ import { formatWithMoment } from "../adapters/obsidian/momentFormat";
 import { userMessage } from "../core/errors";
 import { isDetectable, languageSubtag } from "../core/text/languages";
 import { setButtonLabel } from "../adapters/obsidian/buttonLabel";
+import { addHelpIcon } from "../adapters/obsidian/helpIcon";
 import { addDropdownTooltip } from "../adapters/obsidian/dropdown";
 
 type TabId = "general" | "providers" | "batch";
+
+const DETECT_HELP =
+	"The plugin identifies the language of a selection and reads it with the " +
+	"first matching profile. A profile is a candidate only if its Use for " +
+	"auto-detection option is on. A short selection or an unknown language " +
+	"uses the default profile.";
 
 const LINK_STYLE_LABELS: Record<LinkStyle, string> = {
 	wikilink: "Wikilink — [[audio.mp3|word]]",
@@ -217,7 +224,7 @@ export class SettingsTab extends PluginSettingTab {
 			)
 			.setHeading();
 
-		new Setting(container)
+		const detect = new Setting(container)
 			.setName("Detect language from selected text")
 			.addToggle((toggle) =>
 				toggle
@@ -229,17 +236,23 @@ export class SettingsTab extends PluginSettingTab {
 					}),
 			);
 
+		addHelpIcon(detect, DETECT_HELP);
+
 		if (!this.plugin.settings.autoDetect.enabled) return;
 
 		new Setting(container)
 			.setName("Minimum length")
 			.setDesc(
 				"Shorter selections use the default profile instead of guessing. " +
-					"Detection is unreliable on very short text.",
+					"This does not apply to a script that only one language uses, such " +
+					"as Korean, Chinese, Japanese, Thai, or Greek: one character of those " +
+					"is already conclusive, so it is always detected. The limit applies to " +
+					"Latin, Cyrillic, Arabic, and Devanagari, where several languages " +
+					"share the script and only whole words tell them apart.",
 			)
 			.addSlider((slider) =>
 				slider
-					.setLimits(10, 200, 5)
+					.setLimits(1, 200, 1)
 					.setValue(this.plugin.settings.autoDetect.minChars)
 					.setDynamicTooltip()
 					.onChange(async (value) => {

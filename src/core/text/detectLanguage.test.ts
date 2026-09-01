@@ -130,4 +130,47 @@ describe("selectProfile", () => {
 		expect(result.profile.id).toBe(ja.id);
 		expect(result.detected).toBe("ja");
 	});
+
+	// The gate exists for text that needs words to identify. A script only one
+	// language uses needs none, so these pass at the default threshold of 30.
+	it("resolves a single CJK character despite the minimum length", () => {
+		const zh = profile("Chinese", "zh-HK");
+		const korean = profile("Korean", "ko-KR");
+
+		const chinese = selectProfile("中", [zh, korean, en], en, opts, francDetector)!;
+		expect(chinese.profile.id).toBe(zh.id);
+		expect(chinese.detected).toBe("zh");
+		expect(chinese.reason).toBe("detected");
+
+		const hangul = selectProfile("이", [zh, korean, en], en, opts, francDetector)!;
+		expect(hangul.profile.id).toBe(korean.id);
+		expect(hangul.detected).toBe("ko");
+		expect(hangul.reason).toBe("detected");
+	});
+
+	it("still applies the minimum length to a shared script", () => {
+		const zh = profile("Chinese", "zh-HK");
+		const korean = profile("Korean", "ko-KR");
+
+		const result = selectProfile("a", [zh, korean, en], en, opts, francDetector)!;
+		expect(result.reason).toBe("too-short");
+		expect(result.profile.id).toBe(en.id);
+	});
+
+	it("still applies the minimum length to text mixing scripts", () => {
+		const korean = profile("Korean", "ko-KR");
+
+		const result = selectProfile("안녕 hi", [korean, en], en, opts, francDetector)!;
+		expect(result.reason).toBe("too-short");
+		expect(result.profile.id).toBe(en.id);
+	});
+
+	it("falls back when the script is certain but no profile covers it", () => {
+		const korean = profile("Korean", "ko-KR");
+
+		// Chinese is not a candidate, so franc is not allowed to answer cmn.
+		const result = selectProfile("中", [korean, en], en, opts, francDetector)!;
+		expect(result.reason).toBe("undetermined");
+		expect(result.profile.id).toBe(en.id);
+	});
 });

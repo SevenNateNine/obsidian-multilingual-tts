@@ -1,5 +1,6 @@
 import type { VoiceProfile } from "../settings/types";
 import { languageSubtag, toIso6391, toIso6393 } from "./languages";
+import { identifiesLanguageByScript } from "./scripts";
 
 export type SelectionReason =
 	"detected" | "too-short" | "undetermined" | "no-candidates" | "no-match" | "disabled";
@@ -48,7 +49,9 @@ export function selectProfile(
 	if (!opts.enabled) {
 		return { profile: chosenFallback, detected: null, reason: "disabled" };
 	}
-	if (text.trim().length < opts.minChars) {
+	// The minimum length protects against a guess from too few words. A script
+	// that only one language uses needs no words at all, so it skips the gate.
+	if (text.trim().length < opts.minChars && !identifiesLanguageByScript(text)) {
 		return { profile: chosenFallback, detected: null, reason: "too-short" };
 	}
 

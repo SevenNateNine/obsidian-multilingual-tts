@@ -105,7 +105,9 @@ Detection compares the selected text only against the languages your own profile
 
 It needs profiles in **at least two languages** to have anything to choose between; the settings tab says so explicitly when it can't work. Selections shorter than the minimum length use the default profile rather than guessing.
 
-Profiles can opt out individually with **Use for auto-detection**. When two profiles share a language, the one higher in the settings list wins.
+The minimum length does not apply to a script that only one language uses — Korean, Chinese, Japanese, Thai, Greek and others. A single character in one of those is already conclusive, so it is detected whatever the minimum is set to. The minimum applies to Latin, Cyrillic, Arabic and Devanagari, where several languages share one script and only whole words tell them apart.
+
+Profiles can opt out individually with **Use for auto-detection**. A language with no opted-in profile is never detected, however clear the script is — the selection falls back to the default profile instead. When two profiles share a language, the one higher in the settings list wins.
 
 ## Output folders
 
