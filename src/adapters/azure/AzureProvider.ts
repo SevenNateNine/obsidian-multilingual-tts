@@ -126,32 +126,29 @@ export class AzureProvider implements RenderingProvider {
 	 */
 	async voiceListStatus(): Promise<VoiceListStatus> {
 		this.discardStaleVoices();
-		const { region } = this.credentials();
 		const info = await this.cacheInfo().catch(() => null);
 
 		if (!info || info.voiceCount === 0) {
 			return {
 				text: this.isConfigured()
-					? "No voice list cached yet. Press Refresh to load voices."
-					: "No voice list cached. Add a speech key and region.",
+					? "No voices cached yet. Press Refresh."
+					: "Add a speech key and region to load voices.",
 				warning: false,
 			};
 		}
 
 		// isCatalogFresh rejects a catalog from another region, so a region change
 		// silently invalidates the cache. Say so instead of showing stale counts.
-		const current = region.trim();
-		if (current && info.region && info.region !== current) {
+		const region = this.credentials().region.trim();
+		if (region && info.region && info.region !== region) {
 			return {
-				text: `Cached for ${info.region}. The current region is ${current}. Press Refresh.`,
+				text: `Cached for ${info.region}, not ${region}. Press Refresh.`,
 				warning: true,
 			};
 		}
 
 		return {
-			text:
-				`${info.voiceCount} voices across ${info.localeCount} languages` +
-				` · updated ${formatRelativeTime(info.fetchedAt)}`,
+			text: `${info.voiceCount} voices · ${info.localeCount} languages · updated ${formatRelativeTime(info.fetchedAt)}`,
 			warning: false,
 			tooltip: formatAbsoluteTime(info.fetchedAt),
 		};

@@ -59,14 +59,12 @@ export class SystemProvider implements SpeakingProvider {
 		}
 
 		const voices = await this.listVoices();
+		if (voices.length === 0) {
+			return { text: "No voices installed on this device.", warning: true };
+		}
+
 		const locales = new Set(voices.map((v) => v.locale)).size;
-		return {
-			text:
-				voices.length === 0
-					? "No voices installed on this device."
-					: `${voices.length} voices across ${locales} languages on this device`,
-			warning: voices.length === 0,
-		};
+		return { text: `${voices.length} voices · ${locales} languages`, warning: false };
 	}
 
 	/**
