@@ -9,7 +9,8 @@ export interface ConvertModalOptions {
 	profile: VoiceProfile;
 	/** Asked again per profile and per edit, because both change the name. */
 	defaultBasename: (profile: VoiceProfile, text: string) => string;
-	onSaved: (linkText: string) => void;
+	/** Called with the vault path of the clip, once it is on disk. */
+	onSaved: (path: string) => void;
 }
 
 /**
@@ -23,7 +24,7 @@ export interface ConvertModalOptions {
 export class ConvertModal extends Modal {
 	private readonly plugin: MultilingualTtsPlugin;
 	private readonly defaultBasename: (profile: VoiceProfile, text: string) => string;
-	private readonly onSaved: (linkText: string) => void;
+	private readonly onSaved: (path: string) => void;
 
 	private text: string;
 	private profile: VoiceProfile;
@@ -194,14 +195,7 @@ export class ConvertModal extends Modal {
 
 	private announceSaved(path: string): void {
 		new Notice(`Saved ${path}`);
-
-		const file = this.plugin.fileAt(path);
-		if (!file) return;
-
-		// Resolved against the note that receives the link, so the link is the
-		// shortest form that works from that note.
-		const sourcePath = this.app.workspace.getActiveFile()?.path ?? "";
-		this.onSaved(this.app.metadataCache.fileToLinktext(file, sourcePath));
+		this.onSaved(path);
 	}
 
 	private setStatus(message: string): void {

@@ -82,3 +82,20 @@ export interface NoteRecord {
 export interface NoteIndex {
 	snapshot(): NoteRecord[];
 }
+
+/**
+ * One property of one note, read from the cache and written through the vault.
+ *
+ * `update` takes a function rather than a value: the write sees the live
+ * frontmatter, and the cache can be seconds behind an edit.
+ */
+export interface NotePropertyStore {
+	/** As the cache holds it. Undefined when the note or the property is absent. */
+	current(notePath: string, property: string): unknown;
+	/** Apply `next` to the live value and write the note. Rejects with a `TtsError`. */
+	update(
+		notePath: string,
+		property: string,
+		next: (existing: unknown) => unknown,
+	): Promise<void>;
+}

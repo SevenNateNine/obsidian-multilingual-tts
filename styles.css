@@ -277,6 +277,12 @@ input.t2ap-invalid {
 	margin-bottom: var(--size-4-2);
 }
 
+/* After-save dialog: the value a property holds, which can be a long link. */
+.t2ap-current-value {
+	margin-top: 0;
+	word-break: break-word;
+}
+
 /* Fuzzy profile picker */
 .t2ap-suggestion-title {
 	font-weight: var(--font-medium);

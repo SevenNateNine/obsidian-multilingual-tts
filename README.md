@@ -13,7 +13,7 @@ This is built for vaults that mix languages: language notes, translation work, r
 - **Per-profile output folders** — the French profile can file its audio under `Audio/French/` while everything else uses the global default.
 - **Right-click a word** — read it, or save the audio, or save it and turn the word into a link to that audio. You choose which of the three the menu offers.
 - **Template file names** — audio is named after the words you read, and you can rename it with the same variables as the Obsidian Templates plugin, globally or per profile.
-- **Save to audio files** — writes into your vault (so it works on mobile) and can insert a playable embed at the cursor.
+- **Save to audio files** — writes into your vault (so it works on mobile), can insert a playable embed at the cursor, and can link the file to the note: replace the highlighted words, or write a wikilink into a note property.
 - **Long notes** — text is split at sentence boundaries, so playback starts after the first chunk rather than the whole note, and files longer than one request are joined into a single file.
 
 ## Installation
@@ -62,14 +62,14 @@ None of the three modes protect against software that already runs on your machi
 
 ## Commands
 
-| Command                      | What it does                                                |
-| ---------------------------- | ----------------------------------------------------------- |
-| Read selection               | Reads using the auto-detected or default profile            |
-| Read selection with profile… | Fuzzy picker showing each profile's name and description    |
-| Convert text to audio…       | Dialog to edit the text, choose a profile, and play or save |
-| Switch default voice profile | Changes which profile is the default                        |
-| Pause or resume              | Toggles playback                                            |
-| Stop                         | Stops playback and cancels pending synthesis                |
+| Command                      | What it does                                                                                          |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Read selection               | Reads using the auto-detected or default profile                                                      |
+| Read selection with profile… | Fuzzy picker showing each profile's name and description                                              |
+| Convert text to audio…       | Dialog to edit the text, choose a profile, and play or save. After a save it offers to link the audio |
+| Switch default voice profile | Changes which profile is the default                                                                  |
+| Pause or resume              | Toggles playback                                                                                      |
+| Stop                         | Stops playback and cancels pending synthesis                                                          |
 
 With nothing selected, **Read selection** can read everything before or after the cursor — see **Reading → With no selection, read**.
 
@@ -77,13 +77,13 @@ With nothing selected, **Read selection** can read everything before or after th
 
 Right-click a selection and the plugin offers three actions, grouped together:
 
-| Item                      | What it does                                                             |
-| ------------------------- | ------------------------------------------------------------------------ |
-| Read selection            | Plays it                                                                 |
-| Read and save audio       | Plays it and writes the audio into your vault                            |
-| Read, save and link audio | The same, and replaces the selected words with a link to the saved audio |
+| Item                      | What it does                                                                              |
+| ------------------------- | ----------------------------------------------------------------------------------------- |
+| Read selection            | Plays it                                                                                  |
+| Read and save audio       | Plays it, writes the audio into your vault, then offers to link it (see **After saving**) |
+| Read, save and link audio | The same, and replaces the selected words with a link to the saved audio                  |
 
-Turn each item on or off under **Settings → General → Context menu**. All three are on to start with.
+Turn each item on or off under **Settings → General → Context menu**. All three are on to start with. **Read, save and link audio** is the one-click form of the highlighted-text choice in the **After saving** dialog. It never asks.
 
 **Link style** decides what replaces the words:
 
@@ -98,6 +98,25 @@ A wikilink is the default because Obsidian rewrites it when the audio file is mo
 The two saving actions render the audio once and play that file, rather than speaking the text and then paying for the same synthesis a second time. The cost is that playback starts after the whole selection is rendered. For a word this is not noticeable. For a long paragraph, plain **Read selection** starts sooner, because it plays the first chunk while it renders the next.
 
 A profile on the device voices cannot write a file. Those two actions report that and save nothing.
+
+## After saving
+
+Once a file is saved, from **Convert text to audio…** or from **Read and save audio**, a dialog asks where the link to it goes:
+
+- **Highlighted text** replaces the words that were read with a link, in the **Link style** chosen for the context menu. It is offered only when the save started from a selection.
+- **Note property** writes `[[Audio/안녕.mp3]]` into a frontmatter property. The dropdown lists the properties of the note first, then the properties used elsewhere in the vault. Choose **New property…** to type a name that no note has yet.
+
+When the property already holds a value, the dialog shows it and asks whether to **replace** it or **add the link as a list item**. Adding turns a single value into a list and never removes anything. A property that already links to the same file is left as it is.
+
+Turn on **Always do this** and the choice is applied without asking from then on. **Always do this** with **Skip** turns the step off. Both are undone under **Settings → General → Output**:
+
+| Setting                               | What it does                                                                         |
+| ------------------------------------- | ------------------------------------------------------------------------------------ |
+| After saving, link the audio          | Ask each time, replace the highlighted text, write to a note property, or do nothing |
+| Property                              | The property the automatic mode writes to, and the one the dialog offers first       |
+| When the property already has a value | Ask, replace it, or add the link as a list item                                      |
+
+An automatic choice that is not possible, for example replacing the highlighted text after a save with no selection, falls back to the dialog. **Insert player at cursor** still applies after a property link or a skip, but not after the highlighted text was replaced, because the cursor then sits at the end of the new link. The link lands in the note that was open when the save started, even if you switch notes while the audio renders.
 
 ## Auto-detection
 
@@ -217,7 +236,7 @@ npm run lint
 
 Adding a speech engine is three edits: an entry in `core/tts/providerTypes.ts` describing its name and credential fields, a class in `adapters/` implementing `RenderingProvider` or `SpeakingProvider`, and one branch in the factory in `main.ts`. Nothing in `ui/` names an engine, so the settings screen and the profile editor pick it up on their own.
 
-Tests cover the logic that is easy to get quietly wrong: markdown stripping, XML escaping, SSML capability gating, text chunking, WAV concatenation, language mapping, path resolution, settings migration, key encoding and decoding, the chunk prefetch during playback, and every way a read or a save can be refused. They run without Obsidian — `vitest.config.ts` aliases the `obsidian` module to a stub, and the layer split means the playback and conversion flows are testable with fakes rather than a live vault.
+Tests cover the logic that is easy to get quietly wrong: markdown stripping, XML escaping, SSML capability gating, text chunking, WAV concatenation, language mapping, path resolution, settings migration, key encoding and decoding, the chunk prefetch during playback, every way a read or a save can be refused, the decision after a save, and how a link merges into a property that already has a value. They run without Obsidian — `vitest.config.ts` aliases the `obsidian` module to a stub, and the layer split means the playback and conversion flows are testable with fakes rather than a live vault.
 
 ## Credits
 

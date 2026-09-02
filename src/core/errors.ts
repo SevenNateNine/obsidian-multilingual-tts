@@ -16,6 +16,7 @@ export type TtsErrorKind =
 	| "playback"
 	| "corrupt-audio"
 	| "blocked"
+	| "note-write"
 	| "cancelled"
 	| "unknown";
 
@@ -56,6 +57,7 @@ const MESSAGES: Record<TtsErrorKind, string> = {
 	"corrupt-audio":
 		"The speech service returned audio that could not be used. Try again.",
 	blocked: "Speech playback was blocked. Try again after clicking into the note.",
+	"note-write": "The audio was saved, but the note property could not be written.",
 	cancelled: "Playback stopped.",
 	unknown: "Speech synthesis failed.",
 };

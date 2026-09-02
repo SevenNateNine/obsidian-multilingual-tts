@@ -68,6 +68,12 @@ describe("userMessage", () => {
 		).toBe("Speech playback was blocked. Try again after clicking into the note.");
 	});
 
+	it("reports a note write failure as one that happened after the save", () => {
+		expect(userMessage(new TtsError("note-write", "frontmatter is malformed"))).toBe(
+			"The audio was saved, but the note property could not be written.",
+		);
+	});
+
 	it("falls back to a plain Error's own message", () => {
 		expect(userMessage(new Error("disk full"))).toBe("disk full");
 	});

@@ -97,6 +97,42 @@ describe("name templates", () => {
 	});
 });
 
+describe("the after-save block", () => {
+	const afterSave = (raw: unknown) =>
+		migrateSettings({ output: { afterSave: raw } }).output.afterSave;
+
+	it("asks after every save in a vault written before schema 6", () => {
+		expect(migrateSettings({ schemaVersion: 5 }).output.afterSave).toEqual({
+			mode: "ask",
+			property: "",
+			existingValue: "ask",
+		});
+	});
+
+	it("keeps the stored choices, with the property trimmed", () => {
+		expect(
+			afterSave({ mode: "property", property: " audio ", existingValue: "append" }),
+		).toEqual({
+			mode: "property",
+			property: "audio",
+			existingValue: "append",
+		});
+	});
+
+	it("falls back on a mode or an answer this build does not know", () => {
+		expect(afterSave({ mode: "always", existingValue: 7 })).toEqual({
+			mode: "ask",
+			property: "",
+			existingValue: "ask",
+		});
+	});
+
+	it("drops a property that is not text, and a block that is not an object", () => {
+		expect(afterSave({ property: 3 }).property).toBe("");
+		expect(afterSave("nonsense").mode).toBe("ask");
+	});
+});
+
 describe("migrateSettings", () => {
 	it("returns defaults for a fresh install", () => {
 		expect(migrateSettings(null)).toEqual(DEFAULT_SETTINGS);

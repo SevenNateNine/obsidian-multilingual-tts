@@ -18,6 +18,12 @@ import {
 	type ProviderType,
 } from "../tts/providerTypes";
 import { KEY_STORAGE_MODES, type KeyStorage } from "./secret";
+import {
+	DEFAULT_AFTER_SAVE,
+	isAfterSaveMode,
+	isExistingValueMode,
+	type AfterSaveSettings,
+} from "./afterSave";
 import { isLinkStyle } from "../text/audioLink";
 import type { AudioTarget, BatchPreset } from "../batch/types";
 
@@ -83,6 +89,21 @@ function normalizeOutput(stored: Record<string, unknown>): PluginSettings["outpu
 			typeof stored.askForMissingProperty === "boolean"
 				? stored.askForMissingProperty
 				: DEFAULT_SETTINGS.output.askForMissingProperty,
+		afterSave: normalizeAfterSave(pick(stored, "afterSave")),
+	};
+}
+
+/**
+ * The after-save block, from schema 6. A mode this build does not know falls
+ * back to asking, which is the one choice that is never wrong.
+ */
+function normalizeAfterSave(stored: Record<string, unknown>): AfterSaveSettings {
+	return {
+		mode: isAfterSaveMode(stored.mode) ? stored.mode : DEFAULT_AFTER_SAVE.mode,
+		property: typeof stored.property === "string" ? stored.property.trim() : "",
+		existingValue: isExistingValueMode(stored.existingValue)
+			? stored.existingValue
+			: DEFAULT_AFTER_SAVE.existingValue,
 	};
 }
 

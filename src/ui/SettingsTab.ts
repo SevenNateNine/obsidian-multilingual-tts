@@ -24,6 +24,12 @@ import {
 	BUILTIN_NAME_TEMPLATE,
 } from "../core/text/nameTemplate";
 import { LINK_STYLES, type LinkStyle } from "../core/text/audioLink";
+import {
+	AFTER_SAVE_MODES,
+	EXISTING_VALUE_MODES,
+	type AfterSaveMode,
+	type ExistingValueMode,
+} from "../core/settings/afterSave";
 import { nameTemplateHelp } from "./nameTemplateHelp";
 import { formatWithMoment } from "../adapters/obsidian/momentFormat";
 import { userMessage } from "../core/errors";
@@ -44,6 +50,19 @@ const LINK_STYLE_LABELS: Record<LinkStyle, string> = {
 	wikilink: "Wikilink — [[audio.mp3|word]]",
 	markdown: "Markdown link — [word](audio.mp3)",
 	embed: "Player after the word — word ![[audio.mp3]]",
+};
+
+const AFTER_SAVE_LABELS: Record<AfterSaveMode, string> = {
+	ask: "Ask each time",
+	selection: "Replace the highlighted text",
+	property: "Write to a note property",
+	none: "Do nothing",
+};
+
+const EXISTING_VALUE_LABELS: Record<ExistingValueMode, string> = {
+	ask: "Ask",
+	replace: "Replace it",
+	append: "Add the link as a list item",
 };
 
 const TABS: readonly { id: TabId; label: string }[] = [
@@ -763,6 +782,66 @@ export class SettingsTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+
+		this.renderAfterSave(container);
+	}
+
+	/**
+	 * Where the link to a saved clip goes.
+	 *
+	 * The property rows are hidden when no mode reads them, so an answer cannot
+	 * be set for a step that never asks.
+	 */
+	private renderAfterSave(container: HTMLElement): void {
+		const { afterSave } = this.plugin.settings.output;
+
+		new Setting(container)
+			.setName("After saving, link the audio")
+			.setDesc(
+				"What happens after the convert dialog or Read and save audio writes a " +
+					"file. Read, save and link audio always replaces the text.",
+			)
+			.addDropdown((dd) => {
+				for (const mode of AFTER_SAVE_MODES)
+					dd.addOption(mode, AFTER_SAVE_LABELS[mode]);
+				dd.setValue(afterSave.mode).onChange(async (value) => {
+					afterSave.mode = value as AfterSaveMode;
+					await this.plugin.saveSettings();
+					this.renderBody();
+				});
+				addDropdownTooltip(dd);
+			});
+
+		if (afterSave.mode === "selection" || afterSave.mode === "none") return;
+
+		new Setting(container)
+			.setName("Property")
+			.setDesc(
+				"The property that receives a wikilink to the audio. The dialog offers " +
+					"it first.",
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("audio")
+					.setValue(afterSave.property)
+					.onChange(async (value) => {
+						afterSave.property = value.trim();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(container)
+			.setName("When the property already has a value")
+			.addDropdown((dd) => {
+				for (const mode of EXISTING_VALUE_MODES) {
+					dd.addOption(mode, EXISTING_VALUE_LABELS[mode]);
+				}
+				dd.setValue(afterSave.existingValue).onChange(async (value) => {
+					afterSave.existingValue = value as ExistingValueMode;
+					await this.plugin.saveSettings();
+				});
+				addDropdownTooltip(dd);
+			});
 	}
 
 	/**

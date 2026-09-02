@@ -1,14 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveAudioFormat, type PluginSettings } from "./types";
+import { DEFAULT_SETTINGS, resolveAudioFormat, type PluginSettings } from "./types";
 
 const settings = (defaultFormat: string): Pick<PluginSettings, "output"> => ({
-	output: {
-		defaultFolder: "Audio",
-		defaultFormat,
-		insertPlayerAtCursor: false,
-		nameTemplate: "",
-		askForMissingProperty: false,
-	},
+	output: { ...DEFAULT_SETTINGS.output, defaultFormat },
 });
 
 describe("resolveAudioFormat", () => {

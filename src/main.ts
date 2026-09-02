@@ -42,6 +42,14 @@ import { TtsError, userMessage } from "./core/errors";
 import { planRead } from "./core/usecases/planRead";
 import { speak, speakPrepared, type SpeakDeps } from "./core/usecases/speak";
 import { saveAudio, saveAudioPrepared, type SaveDeps } from "./core/usecases/saveAudio";
+import {
+	decideAfterSave,
+	propertyCandidates,
+	rememberChoice,
+	writePropertyLink,
+	type AfterSaveChoice,
+	type AfterSaveDecision,
+} from "./core/usecases/afterSave";
 import type { Refused, SaveOutcome, SpeakOutcome } from "./core/usecases/outcomes";
 import { SystemProvider } from "./adapters/system/SystemProvider";
 import { AzureProvider } from "./adapters/azure/AzureProvider";
@@ -49,6 +57,7 @@ import { HtmlAudioSink } from "./adapters/HtmlAudioSink";
 import { francDetector } from "./adapters/francDetector";
 import { ObsidianAudioStore, fileAtPath } from "./adapters/obsidian/ObsidianAudioStore";
 import { ObsidianNoteIndex } from "./adapters/obsidian/ObsidianNoteIndex";
+import { ObsidianPropertyStore } from "./adapters/obsidian/ObsidianPropertyStore";
 import { CatalogCacheFile } from "./adapters/obsidian/CatalogCacheFile";
 import { obsidianFetcher } from "./adapters/obsidian/obsidianFetcher";
 import { getReadableText } from "./adapters/obsidian/editorText";
@@ -60,8 +69,30 @@ import { PassphraseModal } from "./ui/PassphraseModal";
 import { BatchPreviewModal } from "./ui/BatchPreviewModal";
 import { BatchPresetSuggestModal } from "./ui/BatchPresetSuggestModal";
 import { PropertyPromptModal } from "./ui/PropertyPromptModal";
+import { AfterSaveModal } from "./ui/AfterSaveModal";
 
 type MenuActionId = "read" | "save" | "link";
+
+/** What a save leaves behind, captured before the first await. */
+interface AfterSaveContext {
+	editor: Editor;
+	/** The words that were read. Undefined when the text was typed. */
+	range: EditorSelection | undefined;
+	/** The note that was open when the save started. */
+	note: TFile | null;
+	/** Vault path of the saved clip. */
+	path: string;
+	/** Only the convert dialog honours `output.insertPlayerAtCursor`. */
+	embedAtCursor: boolean;
+}
+
+/** What the settings decided, or what the dialog answered. */
+interface AfterSaveAnswer {
+	choice: AfterSaveChoice | null;
+	always: boolean;
+	/** True when the Replace or Append question was on screen. */
+	existingAsked: boolean;
+}
 
 /** One row per context menu item, in the order they appear. */
 const MENU_ACTIONS: readonly { id: MenuActionId; title: string; icon: string }[] = [
@@ -87,6 +118,7 @@ export default class MultilingualTtsPlugin extends Plugin {
 	private store!: SettingsStore;
 	private audioStore!: ObsidianAudioStore;
 	private noteIndex!: ObsidianNoteIndex;
+	private properties!: ObsidianPropertyStore;
 	/** Held concretely: the starter profile reads the platform default voice. */
 	private system!: SystemProvider;
 	private catalogCache!: CatalogCacheFile;
@@ -213,6 +245,11 @@ export default class MultilingualTtsPlugin extends Plugin {
 
 		this.audioStore = new ObsidianAudioStore(this.app.vault);
 		this.noteIndex = new ObsidianNoteIndex(this.app.vault, this.app.metadataCache);
+		this.properties = new ObsidianPropertyStore(
+			this.app.vault,
+			this.app.metadataCache,
+			this.app.fileManager,
+		);
 		this.system = new SystemProvider();
 		this.catalogCache = new CatalogCacheFile(
 			this.app.vault.adapter,
@@ -464,7 +501,8 @@ export default class MultilingualTtsPlugin extends Plugin {
 	 * cursor has moved to since.
 	 */
 	private async runAction(editor: Editor, action: MenuActionId): Promise<void> {
-		const range = editor.listSelections()[0];
+		const range = editor.somethingSelected() ? editor.listSelections()[0] : undefined;
+		const note = this.app.workspace.getActiveFile();
 		const raw = this.readableText(editor);
 		if (!raw) return;
 
@@ -504,7 +542,17 @@ export default class MultilingualTtsPlugin extends Plugin {
 			new Notice(userMessage(err));
 			console.error("[multilingual-tts] could not play the saved audio", err);
 		});
-		if (action === "link" && range) this.linkSelection(editor, range, outcome.path);
+		if (action === "link") {
+			if (range) this.linkSelection(editor, range, outcome.path, note?.path ?? "");
+			return;
+		}
+		await this.afterSave({
+			editor,
+			range,
+			note,
+			path: outcome.path,
+			embedAtCursor: false,
+		});
 	}
 
 	/** Say which voice was chosen, once per change of profile or language. */
@@ -523,8 +571,16 @@ export default class MultilingualTtsPlugin extends Plugin {
 	 *
 	 * A selection made backwards has its head before its anchor, so the two are
 	 * put in order before the range is read or written.
+	 *
+	 * `sourcePath` is the note that receives the link, so the link is the
+	 * shortest form that works from that note.
 	 */
-	private linkSelection(editor: Editor, range: EditorSelection, path: string): void {
+	private linkSelection(
+		editor: Editor,
+		range: EditorSelection,
+		path: string,
+		sourcePath: string,
+	): void {
 		const file = this.fileAt(path);
 		if (!file) return;
 
@@ -532,9 +588,6 @@ export default class MultilingualTtsPlugin extends Plugin {
 		const from = forward ? range.anchor : range.head;
 		const to = forward ? range.head : range.anchor;
 
-		// Resolved against the note that receives the link, so the link is the
-		// shortest form that works from that note.
-		const sourcePath = this.app.workspace.getActiveFile()?.path ?? "";
 		const markup = audioLink(this.settings.menu.linkStyle, editor.getRange(from, to), {
 			linktext: this.app.metadataCache.fileToLinktext(file, sourcePath),
 			path,
@@ -554,12 +607,18 @@ export default class MultilingualTtsPlugin extends Plugin {
 			return;
 		}
 
+		// Captured now: the dialog stays open while the text is edited, and the
+		// link belongs to the note and the words the dialog started from.
+		const range = editor.somethingSelected() ? editor.listSelections()[0] : undefined;
+		const note = this.app.workspace.getActiveFile();
+
 		new ConvertModal(this.app, {
 			plugin: this,
 			initialText: editor.getSelection(),
 			profile,
 			defaultBasename: (chosen, text) => this.basenameFor(chosen, text),
-			onSaved: (linkText) => this.insertAudioEmbed(editor, linkText),
+			onSaved: (path) =>
+				void this.afterSave({ editor, range, note, path, embedAtCursor: true }),
 		}).open();
 	}
 
@@ -571,6 +630,140 @@ export default class MultilingualTtsPlugin extends Plugin {
 	private insertAudioEmbed(editor: Editor, linkText: string): void {
 		if (!this.settings.output.insertPlayerAtCursor) return;
 		editor.replaceSelection(`![[${linkText}]]`);
+	}
+
+	/**
+	 * Tie the saved clip to the note, as the settings say or as the dialog
+	 * answers. The audio is on disk already, so a failure here is reported
+	 * once and nothing is rolled back.
+	 */
+	private async afterSave(ctx: AfterSaveContext): Promise<void> {
+		const file = this.fileAt(ctx.path);
+		if (!file) {
+			new Notice("The saved file was not found.");
+			return;
+		}
+
+		const settings = this.settings.output.afterSave;
+		const existing =
+			ctx.note && settings.property
+				? this.properties.current(ctx.note.path, settings.property)
+				: undefined;
+		const decision = decideAfterSave(settings, {
+			hasSelection: ctx.range !== undefined,
+			hasNote: ctx.note !== null,
+			existing,
+		});
+
+		try {
+			const answer = await this.resolveChoice(ctx, decision);
+			if (answer.always) {
+				this.settings.output.afterSave = rememberChoice(
+					settings,
+					answer.choice,
+					answer.existingAsked,
+				);
+				await this.saveSettings();
+			}
+
+			const linktext = this.app.metadataCache.fileToLinktext(
+				file,
+				ctx.note?.path ?? "",
+			);
+			await this.applyChoice(ctx, linktext, answer.choice);
+			// A replaced selection leaves the cursor at the end of the new link,
+			// where a second embed would only repeat it.
+			if (ctx.embedAtCursor && answer.choice?.target !== "selection") {
+				this.insertAudioEmbed(ctx.editor, linktext);
+			}
+		} catch (err) {
+			new Notice(userMessage(err));
+			console.error("[multilingual-tts] could not link the saved audio", err);
+		}
+	}
+
+	private resolveChoice(
+		ctx: AfterSaveContext,
+		decision: AfterSaveDecision,
+	): Promise<AfterSaveAnswer> {
+		const settled = (choice: AfterSaveChoice | null): Promise<AfterSaveAnswer> =>
+			Promise.resolve({ choice, always: false, existingAsked: false });
+
+		switch (decision.kind) {
+			case "none":
+				return settled(null);
+			case "selection":
+				return settled({ target: "selection" });
+			case "property":
+				return settled({
+					target: "property",
+					property: decision.property,
+					existingValue: decision.existingValue,
+				});
+			case "ask":
+				return this.askAfterSave(ctx, decision);
+		}
+	}
+
+	/** Resolves with a null choice when the dialog is skipped or closed. */
+	private askAfterSave(
+		ctx: AfterSaveContext,
+		decision: Extract<AfterSaveDecision, { kind: "ask" }>,
+	): Promise<AfterSaveAnswer> {
+		const settings = this.settings.output.afterSave;
+		const note = ctx.note;
+		const active = note
+			? (this.app.metadataCache.getFileCache(note)?.frontmatter ?? {})
+			: {};
+
+		return new Promise((resolve) => {
+			new AfterSaveModal(this.app, {
+				savedPath: ctx.path,
+				offerSelection: decision.offerSelection,
+				offerProperty: decision.offerProperty,
+				candidates: propertyCandidates(
+					settings.property,
+					active,
+					this.noteIndex.snapshot(),
+				),
+				initial: settings,
+				currentValue: (property) =>
+					note ? this.properties.current(note.path, property) : undefined,
+				onSubmit: (choice, always, existingAsked) =>
+					resolve({ choice, always, existingAsked }),
+				onSkip: (always) => resolve({ choice: null, always, existingAsked: false }),
+			}).open();
+		});
+	}
+
+	private async applyChoice(
+		ctx: AfterSaveContext,
+		linktext: string,
+		choice: AfterSaveChoice | null,
+	): Promise<void> {
+		if (!choice) return;
+
+		if (choice.target === "selection") {
+			if (ctx.range)
+				this.linkSelection(ctx.editor, ctx.range, ctx.path, ctx.note?.path ?? "");
+			return;
+		}
+
+		if (!ctx.note) return;
+		const { changed } = await writePropertyLink(
+			{ properties: this.properties },
+			{
+				notePath: ctx.note.path,
+				property: choice.property,
+				link: `[[${linktext}]]`,
+				existingValue: choice.existingValue,
+			},
+		);
+		new Notice(
+			changed
+				? `Linked in ${choice.property}`
+				: `${choice.property} already links to it`,
+		);
 	}
 
 	/** The file name a save produces, from the profile's template chain. */

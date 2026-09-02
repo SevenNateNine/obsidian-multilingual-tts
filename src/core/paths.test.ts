@@ -8,20 +8,14 @@ import {
 	uniqueVaultPath,
 	validateFolderPath,
 } from "./paths";
-import type { PluginSettings } from "./settings/types";
+import { DEFAULT_SETTINGS, type PluginSettings } from "./settings/types";
 import { BUILTIN_NAME_TEMPLATE } from "./text/nameTemplate";
 
 const settings = (
 	defaultFolder: string,
 	nameTemplate = "",
 ): Pick<PluginSettings, "output"> => ({
-	output: {
-		defaultFolder,
-		defaultFormat: "",
-		insertPlayerAtCursor: false,
-		nameTemplate,
-		askForMissingProperty: false,
-	},
+	output: { ...DEFAULT_SETTINGS.output, defaultFolder, nameTemplate },
 });
 
 const ctrl = (code: number) => String.fromCharCode(code);

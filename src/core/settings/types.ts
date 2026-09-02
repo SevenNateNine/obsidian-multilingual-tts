@@ -1,4 +1,5 @@
 import type { KeyStorage } from "./secret";
+import { DEFAULT_AFTER_SAVE, type AfterSaveSettings } from "./afterSave";
 import type { LinkStyle } from "../text/audioLink";
 import type { AudioTarget, BatchPreset } from "../batch/types";
 import {
@@ -98,6 +99,8 @@ export interface PluginSettings {
 		nameTemplate: string;
 		/** Ask for a property the note lacks, instead of taking the note name. */
 		askForMissingProperty: boolean;
+		/** How a saved clip is linked to the note it was read from. */
+		afterSave: AfterSaveSettings;
 	};
 	/** Which actions the editor context menu offers, and how the third one links. */
 	menu: {
@@ -118,7 +121,7 @@ export interface PluginSettings {
 	textFilterRegex: string;
 }
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 /** The device voices, which need no credentials and are always available. */
 export function systemProviderInstance(): ProviderInstance {
@@ -146,6 +149,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
 		insertPlayerAtCursor: false,
 		nameTemplate: "",
 		askForMissingProperty: false,
+		afterSave: DEFAULT_AFTER_SAVE,
 	},
 	menu: {
 		read: true,
