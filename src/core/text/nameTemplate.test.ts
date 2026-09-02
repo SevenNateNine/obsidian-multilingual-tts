@@ -4,6 +4,7 @@ import {
 	expandNameTemplate,
 	missingProperties,
 	nameTemplateError,
+	unknownNameFilters,
 	unknownNameVariables,
 	type NameVars,
 } from "./nameTemplate";
@@ -139,6 +140,62 @@ describe("expandNameTemplate", () => {
 		});
 	});
 
+	describe("|filter", () => {
+		const phrase = vars({
+			properties: { "natural-language": "you can do this later" },
+		});
+
+		it("writes a property in kebab case", () => {
+			expect(expandNameTemplate(["{{property:natural-language|kebab}}"], phrase)).toBe(
+				"you-can-do-this-later",
+			);
+		});
+
+		it("offers snake, camel, and pascal case as well", () => {
+			expect(expandNameTemplate(["{{property:natural-language|snake}}"], phrase)).toBe(
+				"you_can_do_this_later",
+			);
+			expect(expandNameTemplate(["{{property:natural-language|camel}}"], phrase)).toBe(
+				"youCanDoThisLater",
+			);
+			expect(expandNameTemplate(["{{property:natural-language|pascal}}"], phrase)).toBe(
+				"YouCanDoThisLater",
+			);
+		});
+
+		it("takes a plain-text prefix from the profile template", () => {
+			const chain = ["kr_{{default}}", "{{property:natural-language|kebab}}"];
+			expect(expandNameTemplate(chain, phrase)).toBe("kr_you-can-do-this-later");
+		});
+
+		it("applies to the title a missing property falls back to", () => {
+			expect(expandNameTemplate(["{{property:missing|kebab}}"], vars())).toBe(
+				"korean-vocabulary",
+			);
+		});
+
+		it("applies to the whole name {{default}} extends", () => {
+			expect(
+				expandNameTemplate(["{{default|pascal}}", "{{title}} {{profile}}"], vars()),
+			).toBe("KoreanVocabularyKorean");
+		});
+
+		// The stub formatter returns `<YYYY MM>`, and the brackets only separate words.
+		it("keeps the format and the filter apart", () => {
+			expect(expandNameTemplate(["{{date:YYYY MM|snake}}"], vars())).toBe("yyyy_mm");
+		});
+
+		it("tolerates spaces around the bar", () => {
+			expect(expandNameTemplate(["{{ title | kebab }}"], vars())).toBe(
+				"korean-vocabulary",
+			);
+		});
+
+		it("leaves an unknown filter as it was written", () => {
+			expect(expandNameTemplate(["{{title|kebap}}"], vars())).toBe("{{title|kebap}}");
+		});
+	});
+
 	it("returns nothing for an empty chain", () => {
 		expect(expandNameTemplate([], vars())).toBe("");
 	});
@@ -180,6 +237,12 @@ describe("missingProperties", () => {
 		expect(missingProperties(["{{property}}"], vars())).toEqual([]);
 	});
 
+	it("reads the property name when a filter follows it", () => {
+		expect(missingProperties(["{{property:natural-language|kebab}}"], vars())).toEqual([
+			"natural-language",
+		]);
+	});
+
 	it("follows the chain only where {{default}} reaches", () => {
 		const chain = ["{{default}}-x", "{{property:unit}}"];
 		expect(missingProperties(chain, vars())).toEqual(["unit"]);
@@ -206,12 +269,39 @@ describe("unknownNameVariables", () => {
 	});
 });
 
+describe("unknownNameFilters", () => {
+	it("is empty for the filters this build has", () => {
+		expect(
+			unknownNameFilters(
+				"{{title|kebab}}_{{title|snake}}_{{title|camel}}_{{title|pascal}}",
+			),
+		).toEqual([]);
+	});
+
+	it("is empty for a template with no filter", () => {
+		expect(unknownNameFilters("{{title}}_{{date:YYYY}}")).toEqual([]);
+	});
+
+	it("reports each unknown filter once", () => {
+		expect(
+			unknownNameFilters("{{title|kebap}}-{{date|upper}}-{{title|kebap}}"),
+		).toEqual(["kebap", "upper"]);
+	});
+});
+
 describe("nameTemplateError", () => {
 	it("is null for a usable template", () => {
 		expect(nameTemplateError("{{title}}")).toBeNull();
+		expect(nameTemplateError("{{property:word|kebab}}")).toBeNull();
 	});
 
 	it("names the variable it cannot expand", () => {
 		expect(nameTemplateError("{{titel}}")).toContain("{{titel}}");
+	});
+
+	it("names the filter it cannot apply, and the ones it can", () => {
+		const message = nameTemplateError("{{title|kebap}}");
+		expect(message).toContain("|kebap");
+		expect(message).toContain("|kebab");
 	});
 });

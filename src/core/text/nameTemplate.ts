@@ -7,10 +7,15 @@
  * for this plugin, because a file named after a note and a clock alone cannot
  * tell two clips of the same note apart.
  *
+ * One addition to the syntax: a case filter after a bar, as in
+ * `{{property:word|kebab}}`. The bar is illegal in a file name, so no template
+ * that worked before can contain one.
+ *
  * Free of Obsidian imports, so the whole expansion is unit testable. Moment
  * lives in the obsidian module, so the caller injects the formatter.
  */
 
+import { camelCase, kebabCase, pascalCase, snakeCase } from "./casing";
 import { propertyValues } from "./property";
 
 /**
@@ -66,6 +71,16 @@ export const NAME_VARIABLES = [
 	"default",
 ] as const;
 
+/** The case a filter writes, applied to the value the variable produced. */
+const FILTERS: Record<string, (text: string) => string> = {
+	kebab: kebabCase,
+	snake: snakeCase,
+	camel: camelCase,
+	pascal: pascalCase,
+};
+
+export const NAME_FILTERS: readonly string[] = Object.keys(FILTERS);
+
 /** Between the values of a list property, and short enough to read in a name. */
 const LIST_SEPARATOR = "-";
 
@@ -75,9 +90,12 @@ const LIST_SEPARATOR = "-";
  * `{{default}}` expands by calling back into `expandNameTemplate` from inside a
  * `String.replace` callback. A shared global regex carries `lastIndex` state,
  * so the nested call would reset the position of the outer scan.
+ *
+ * Groups: 1 the variable, 2 the format after a colon, 3 the filter after a
+ * bar. The format stops at a bar, so `{{date:YYYY|kebab}}` reads as intended.
  */
 function variables(): RegExp {
-	return /\{\{\s*([a-zA-Z]+)\s*(?::([^}]*))?\}\}/g;
+	return /\{\{\s*([a-zA-Z]+)\s*(?::([^}|]*))?\s*(?:\|\s*([a-zA-Z]+)\s*)?\}\}/g;
 }
 
 /**
@@ -89,17 +107,29 @@ function variables(): RegExp {
  * bounded because each step consumes one entry of a list built by
  * `resolveNameTemplates`.
  *
- * An unknown variable is left as written, so a typo is visible in the name
- * rather than silently dropped. `unknownNameVariables` reports it before then.
+ * An unknown variable or filter is left as written, so a typo is visible in the
+ * name rather than silently dropped. `unknownNameVariables` and
+ * `unknownNameFilters` report it before then.
  */
 export function expandNameTemplate(chain: readonly string[], vars: NameVars): string {
 	const [template, ...rest] = chain;
 	if (template === undefined) return "";
 
-	return template.replace(variables(), (match, name: string, format?: string) => {
-		const value = substitute(name, format, rest, vars);
-		return value ?? match;
-	});
+	return template.replace(
+		variables(),
+		(match, name: string, format?: string, filter?: string) => {
+			const value = substitute(name, format, rest, vars);
+			if (value === null) return match;
+			return applyFilter(filter, value) ?? match;
+		},
+	);
+}
+
+/** The value in the case the filter names. Null for a filter this build does not know. */
+function applyFilter(filter: string | undefined, value: string): string | null {
+	if (filter === undefined) return value;
+	const apply = FILTERS[filter];
+	return apply ? apply(value) : null;
 }
 
 /** Null for a name this build does not know. The caller keeps the literal text. */
@@ -197,6 +227,18 @@ export function unknownNameVariables(template: string): string[] {
 	return found;
 }
 
+/** The filter names in `template` that this build cannot apply. */
+export function unknownNameFilters(template: string): string[] {
+	const found: string[] = [];
+
+	for (const match of template.matchAll(variables())) {
+		const filter = match[3];
+		if (filter === undefined) continue;
+		if (!NAME_FILTERS.includes(filter) && !found.includes(filter)) found.push(filter);
+	}
+	return found;
+}
+
 /** Collapse the whitespace and cut at a word boundary, so a paragraph stays a name. */
 function shorten(text: string): string {
 	const collapsed = text.replace(/\s+/g, " ").trim();
@@ -214,9 +256,17 @@ function shorten(text: string): string {
  * way, under the field.
  */
 export function nameTemplateError(template: string): string | null {
-	const unknown = unknownNameVariables(template);
-	if (unknown.length === 0) return null;
+	const unknownVariables = unknownNameVariables(template);
+	if (unknownVariables.length > 0) {
+		const names = unknownVariables.map((name) => `{{${name}}}`).join(", ");
+		return `Unknown variable: ${names}. It is written into the name as it stands.`;
+	}
 
-	const names = unknown.map((name) => `{{${name}}}`).join(", ");
-	return `Unknown variable: ${names}. It is written into the name as it stands.`;
+	const filters = unknownNameFilters(template);
+	if (filters.length > 0) {
+		const names = filters.map((name) => `|${name}`).join(", ");
+		const known = NAME_FILTERS.map((name) => `|${name}`).join(", ");
+		return `Unknown filter: ${names}. The filters are ${known}.`;
+	}
+	return null;
 }

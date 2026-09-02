@@ -17,6 +17,8 @@ export function nameTemplateHelp(lead: string): DocumentFragment {
 			" as the Obsidian Templates plugin, and adds {{selection}} for the words " +
 				"you read, {{property:name}} for a property of the note, {{profile}}, " +
 				"{{locale}}, and {{default}} for the name this template extends. " +
+				"Add |kebab, |snake, |camel, or |pascal inside the braces to change " +
+				"the case, for example {{property:word|kebab}}. " +
 				"{{time}} defaults to HH-mm-ss, because a colon cannot appear in a " +
 				"file name.",
 		);

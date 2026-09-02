@@ -133,6 +133,17 @@ By default each file is named after the words you read, so reading "hey" writes 
 
 `{{time}}` defaults to `HH-mm-ss` rather than Obsidian's `HH:mm`, because a colon cannot appear in a file name. A colon in a format you type is removed for the same reason.
 
+A filter after a bar changes the case of what a variable produces. It applies to the whole value, including the note name a missing property falls back to. For a property set to `you can do this later`:
+
+| Filter                                  | File name                   |
+| --------------------------------------- | --------------------------- |
+| `{{property:natural-language\|kebab}}`  | `you-can-do-this-later.mp3` |
+| `{{property:natural-language\|snake}}`  | `you_can_do_this_later.mp3` |
+| `{{property:natural-language\|camel}}`  | `youCanDoThisLater.mp3`     |
+| `{{property:natural-language\|pascal}}` | `YouCanDoThisLater.mp3`     |
+
+A word is a run of letters or digits in any script, so Korean or Chinese text keeps its characters and only the spaces and punctuation change. A format and a filter combine as `{{date:YYYYMMDD|kebab}}`.
+
 A profile can set its own template under **Edit profile → Output → File name template**, and an empty one inherits the global template. `{{default}}` stands for the template one level up, so you can extend a name instead of repeating it:
 
 | Profile template           | Result                     |
@@ -140,6 +151,8 @@ A profile can set its own template under **Edit profile → Output → File name
 | `{{default}}_drill`        | Appends to the global name |
 | `KR_{{default}}`           | Prepends to it             |
 | `{{selection}}_{{locale}}` | Replaces it completely     |
+
+That is how one global template names files for every language. Set the global template to `{{property:natural-language|kebab}}`, give the Korean profile `kr_{{default}}` and the Cantonese profile `hk_{{default}}`, and a note with `natural-language: you can do this later` writes `kr_you-can-do-this-later.mp3` from one voice and `hk_you-can-do-this-later.mp3` from the other.
 
 Illegal characters are removed from the finished name, and an existing file is never overwritten: a numeric suffix is added instead.
 
